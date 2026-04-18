@@ -2,12 +2,9 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
+COPY pyproject.toml requirements.txt config.yaml.example ./
 COPY src/ src/
-COPY pyproject.toml .
-RUN pip install --no-cache-dir --no-deps .
+RUN pip install --no-cache-dir -r requirements.txt && cp config.yaml.example config.yaml
 
 EXPOSE 8000
 

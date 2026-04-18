@@ -3,34 +3,103 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+_RESTRICTED_EXTRA_TOKENS = (
+    "api_key",
+    "token",
+    "secret",
+    "password",
+    "base_url",
+    "api_base",
+    "endpoint",
+    "url",
+    "header",
+    "query",
+    "client",
+    "organization",
+    "project",
+    "proxy",
+    "transport",
+)
 
 
 class BackendConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     provider: str
     api_key: str
     model: str
     base_url: str | None = None
-    extra: dict = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("provider", "api_key", "model")
+    @classmethod
+    def _validate_required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be empty")
+        return value
+
+    @field_validator("base_url")
+    @classmethod
+    def _validate_base_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("base_url must not be empty when provided")
+        return value
+
+    @field_validator("extra")
+    @classmethod
+    def _validate_extra(cls, value: dict[str, Any]) -> dict[str, Any]:
+        blocked = sorted(
+            key for key in value if any(token in key.strip().lower() for token in _RESTRICTED_EXTRA_TOKENS)
+        )
+        if blocked:
+            blocked_list = ", ".join(blocked)
+            raise ValueError("extra contains restricted transport or credential keys: " f"{blocked_list}")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_provider_specific_fields(self) -> BackendConfig:
+        if self.provider == "openai_compat" and not self.base_url:
+            raise ValueError("openai_compat backends require base_url")
+        if self.base_url and self.provider != "openai_compat":
+            raise ValueError("base_url is only supported for openai_compat backends")
+        return self
 
 
 class PriorityGroup(BaseModel):
-    priority: int
-    backends: list[BackendConfig]
+    model_config = ConfigDict(extra="forbid")
+
+    priority: int = Field(ge=1)
+    backends: list[BackendConfig] = Field(min_length=1)
 
 
 class ServerConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = Field(default=8000, ge=1, le=65535)
     api_key: str = ""
+
+    @field_validator("host", "api_key")
+    @classmethod
+    def _strip_text(cls, value: str) -> str:
+        return value.strip()
 
 
 class AppConfig(BaseModel):
-    keep_cycles: int = 1
+    model_config = ConfigDict(extra="forbid")
+
+    keep_cycles: int = Field(default=1, ge=1)
     server: ServerConfig = Field(default_factory=ServerConfig)
-    providers: list[PriorityGroup]
+    providers: list[PriorityGroup] = Field(min_length=1)
 
 
 _ENV_VAR_RE = re.compile(r"\$\{([^}]+)\}")
@@ -58,7 +127,11 @@ def _walk_and_expand(obj):
 
 
 def load_config(path: str | Path) -> AppConfig:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
+    if raw is None:
+        raise ValueError("Config file is empty")
     raw = _walk_and_expand(raw)
+    if not isinstance(raw, dict):
+        raise ValueError("Config root must be a mapping")
     return AppConfig(**raw)

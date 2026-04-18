@@ -1,4 +1,4 @@
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from ai_free_swap.converters import openai_to_langchain
 from ai_free_swap.models import ChatMessage
@@ -41,6 +41,12 @@ class TestOpenaiToLangchain:
         msgs = openai_to_langchain([ChatMessage(role="user", content=None)])
         assert msgs[0].content == ""
 
-    def test_unknown_role_defaults_to_human(self):
-        msgs = openai_to_langchain([ChatMessage(role="tool", content="result")])
-        assert isinstance(msgs[0], HumanMessage)
+    def test_tool_message(self):
+        msgs = openai_to_langchain([ChatMessage(role="tool", content="result", tool_call_id="call-1")])
+        assert isinstance(msgs[0], ToolMessage)
+        assert msgs[0].content == "result"
+        assert msgs[0].tool_call_id == "call-1"
+
+    def test_name_is_preserved(self):
+        msgs = openai_to_langchain([ChatMessage(role="user", content="Hello", name="u1")])
+        assert msgs[0].name == "u1"

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+from langchain_core.messages import HumanMessage
 
-from ai_free_swap.config import BackendConfig
-from ai_free_swap.router import AllProvidersFailedError, Router
+from ai_free_swap.router import (
+    AllProvidersFailedError,
+    NoMatchingProvidersError,
+    Router,
+    StreamingProviderError,
+)
 
-from .conftest import FakeProvider, make_config
+from .conftest import make_config
 
 import ai_free_swap.providers  # noqa: F401
 
@@ -20,177 +24,135 @@ def messages():
 
 class TestRouterInit:
     def test_single_group(self):
-        config = make_config([[{}]])
-        router = Router(config)
+        router = Router(make_config([[{}]]))
         assert len(router.priority_groups) == 1
         assert len(router.priority_groups[0]) == 1
 
-    def test_multiple_groups_sorted_by_priority(self):
-        config = make_config([[{}], [{}], [{}]])
-        router = Router(config)
-        assert len(router.priority_groups) == 3
-
-    def test_multiple_backends_in_group(self):
-        config = make_config([[{}, {}, {}]])
-        router = Router(config)
-        assert len(router.priority_groups[0]) == 3
+    def test_merges_duplicate_priorities(self):
+        router = Router(
+            make_config(
+                [[{}], [{}], [{}]],
+                priorities=[1, 1, 2],
+            )
+        )
+        assert len(router.priority_groups) == 2
+        assert len(router.priority_groups[0]) == 2
 
     def test_unknown_provider_raises(self):
-        config = make_config([[{"provider": "nonexistent_xyz"}]])
         with pytest.raises(ValueError, match="Unknown provider 'nonexistent_xyz'"):
-            Router(config)
+            Router(make_config([[{"provider": "nonexistent_xyz"}]]))
 
 
 class TestRouterRoute:
     @pytest.mark.asyncio
-    async def test_success_first_try(self, messages):
-        config = make_config([[{}]])
-        router = Router(config)
-        router.priority_groups[0][0].response = "success!"
-        result = await router.route(messages)
-        assert result == "success!"
+    async def test_returns_actual_model_for_selected_backend(self, messages):
+        router = Router(
+            make_config(
+                [
+                    [
+                        {"model": "model-a", "response": "from a"},
+                        {"model": "model-b", "response": "from b"},
+                    ]
+                ]
+            )
+        )
+        result = await router.route(messages, requested_model="model-b")
+        assert result.content == "from b"
+        assert result.model == "model-b"
 
     @pytest.mark.asyncio
-    async def test_fallback_within_group(self, messages):
-        config = make_config([[{}, {}]])
-        router = Router(config)
-        router.priority_groups[0][0].should_fail = True
-        router.priority_groups[0][1].response = "from second"
-        # With random ordering, one of them will succeed
-        # Run multiple times to cover both orderings
-        results = set()
-        for _ in range(20):
-            router.priority_groups[0][0].should_fail = True
-            router.priority_groups[0][0].response = "from first"
-            router.priority_groups[0][1].should_fail = False
-            router.priority_groups[0][1].response = "from second"
+    async def test_retries_all_same_priority_backends_before_next_priority(self, messages):
+        router = Router(
+            make_config(
+                [
+                    [{"should_fail": True}],
+                    [{"response": "same-priority success"}],
+                    [{"response": "later priority"}],
+                ],
+                priorities=[1, 1, 2],
+            )
+        )
+        with patch("ai_free_swap.router.random.sample", side_effect=lambda group, _: group):
             result = await router.route(messages)
-            results.add(result)
-        # Should always get "from second" since first always fails
-        # (or "from first" if second is tried first but first doesn't fail...
-        # but first always fails, so we always get "from second")
-        assert results == {"from second"}
+        assert result.content == "same-priority success"
+        assert result.provider_name == "fake(test-model)"
 
     @pytest.mark.asyncio
-    async def test_fallback_to_next_priority(self, messages):
-        config = make_config([[{}], [{}]])
-        router = Router(config)
-        router.priority_groups[0][0].should_fail = True
-        router.priority_groups[1][0].response = "from priority 2"
+    async def test_keep_cycles_retries_until_success(self, messages):
+        router = Router(make_config([[{"response": "finally"}]], keep_cycles=3))
+        provider = router.priority_groups[0][0]
+        attempts = 0
+        original_create = provider.create_chat_model
+
+        def counting_create():
+            nonlocal attempts
+            attempts += 1
+            provider.should_fail = attempts < 3
+            return original_create()
+
+        provider.create_chat_model = counting_create
         result = await router.route(messages)
-        assert result == "from priority 2"
+        assert result.content == "finally"
+        assert attempts == 3
 
     @pytest.mark.asyncio
     async def test_all_fail_raises(self, messages):
-        config = make_config([[{}], [{}]])
-        router = Router(config)
-        router.priority_groups[0][0].should_fail = True
-        router.priority_groups[1][0].should_fail = True
+        router = Router(make_config([[{"should_fail": True}], [{"should_fail": True}]]))
         with pytest.raises(AllProvidersFailedError) as exc_info:
             await router.route(messages)
         assert len(exc_info.value.errors) == 2
 
     @pytest.mark.asyncio
-    async def test_keep_cycles_retries(self, messages):
-        config = make_config([[{}]], keep_cycles=3)
-        router = Router(config)
-        call_count = 0
-        original_create = router.priority_groups[0][0].create_chat_model
-
-        def counting_create():
-            nonlocal call_count
-            call_count += 1
-            mock = MagicMock()
-            if call_count < 3:
-                mock.ainvoke = AsyncMock(side_effect=RuntimeError("fail"))
-            else:
-                mock.ainvoke = AsyncMock(return_value=AIMessage(content="finally!"))
-            return mock
-
-        router.priority_groups[0][0].create_chat_model = counting_create
-        result = await router.route(messages)
-        assert result == "finally!"
-        assert call_count == 3
-
-    @pytest.mark.asyncio
-    async def test_keep_cycles_all_fail(self, messages):
-        config = make_config([[{}]], keep_cycles=2)
-        router = Router(config)
-        router.priority_groups[0][0].should_fail = True
-        with pytest.raises(AllProvidersFailedError) as exc_info:
-            await router.route(messages)
-        # 1 backend x 2 cycles = 2 errors
-        assert len(exc_info.value.errors) == 2
-
-    @pytest.mark.asyncio
-    async def test_tries_all_backends_in_group(self, messages):
-        config = make_config([[{}, {}, {}]])
-        router = Router(config)
-        attempted = []
-
-        for i, provider in enumerate(router.priority_groups[0]):
-            provider.should_fail = True
-            original_name = provider.name
-
-            def make_create(idx, prov):
-                def create():
-                    attempted.append(idx)
-                    mock = MagicMock()
-                    mock.ainvoke = AsyncMock(side_effect=RuntimeError("fail"))
-                    return mock
-
-                return create
-
-            provider.create_chat_model = make_create(i, provider)
-
-        with pytest.raises(AllProvidersFailedError):
-            await router.route(messages)
-        # All 3 backends should have been attempted
-        assert sorted(attempted) == [0, 1, 2]
-
-    @pytest.mark.asyncio
-    async def test_stops_on_first_success_in_group(self, messages):
-        config = make_config([[{}, {}]])
-        router = Router(config)
-        router.priority_groups[0][0].response = "first wins"
-        router.priority_groups[0][1].response = "second wins"
-
-        # Patch random.sample to return deterministic order
-        with patch("ai_free_swap.router.random.sample", side_effect=lambda g, n: g):
-            result = await router.route(messages)
-        assert result == "first wins"
+    async def test_unknown_model_raises(self, messages):
+        router = Router(make_config([[{"model": "configured-model"}]]))
+        with pytest.raises(NoMatchingProvidersError, match="configured"):
+            await router.route(messages, requested_model="missing-model")
 
 
 class TestRouterStream:
     @pytest.mark.asyncio
-    async def test_stream_success(self, messages):
-        config = make_config([[{}]])
-        router = Router(config)
-        router.priority_groups[0][0].response = "hello world"
-
-        chunks = []
-        async for chunk in router.route_stream(messages):
-            chunks.append(chunk)
-        assert "".join(chunks).strip() == "hello world"
-
-    @pytest.mark.asyncio
-    async def test_stream_fallback(self, messages):
-        config = make_config([[{}], [{}]])
-        router = Router(config)
-        router.priority_groups[0][0].should_fail = True
-        router.priority_groups[1][0].response = "fallback stream"
-
-        chunks = []
-        async for chunk in router.route_stream(messages):
-            chunks.append(chunk)
+    async def test_prepare_stream_fails_over_before_first_chunk(self, messages):
+        router = Router(
+            make_config(
+                [
+                    [{"model": "broken-model", "should_fail": True}],
+                    [{"model": "good-model", "response": "fallback stream"}],
+                ]
+            )
+        )
+        prepared = await router.prepare_stream(messages)
+        chunks = [chunk async for chunk in prepared.chunks]
         assert "".join(chunks).strip() == "fallback stream"
+        assert prepared.model == "good-model"
 
     @pytest.mark.asyncio
-    async def test_stream_all_fail(self, messages):
-        config = make_config([[{}]])
-        router = Router(config)
-        router.priority_groups[0][0].should_fail = True
+    async def test_prepare_stream_does_not_fail_over_after_partial_output(self, messages):
+        router = Router(
+            make_config(
+                [
+                    [
+                        {
+                            "model": "partial-model",
+                            "stream_chunks": ["partial "],
+                            "stream_fail_after_chunks": 1,
+                        }
+                    ],
+                    [{"model": "fallback-model", "response": "fallback output"}],
+                ]
+            )
+        )
+        prepared = await router.prepare_stream(messages)
 
+        chunks = []
+        with pytest.raises(StreamingProviderError):
+            async for chunk in prepared.chunks:
+                chunks.append(chunk)
+
+        assert chunks == ["partial "]
+        assert prepared.model == "partial-model"
+
+    @pytest.mark.asyncio
+    async def test_prepare_stream_all_fail_raises(self, messages):
+        router = Router(make_config([[{"should_fail": True}]]))
         with pytest.raises(AllProvidersFailedError):
-            async for _ in router.route_stream(messages):
-                pass
+            await router.prepare_stream(messages)

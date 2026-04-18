@@ -1,4 +1,12 @@
-from ai_free_swap.models import make_completion_response, make_stream_chunk
+import pytest
+
+from ai_free_swap.models import (
+    ChatCompletionRequest,
+    ChatMessage,
+    make_completion_response,
+    make_error_response,
+    make_stream_chunk,
+)
 
 
 class TestMakeCompletionResponse:
@@ -36,3 +44,34 @@ class TestMakeStreamChunk:
         chunk = make_stream_chunk(None, "req-1", "model-x", finish_reason="stop")
         assert chunk["choices"][0]["delta"] == {}
         assert chunk["choices"][0]["finish_reason"] == "stop"
+
+
+class TestMakeErrorResponse:
+    def test_error_shape(self):
+        error = make_error_response("boom", "server_error", code="all_failed")
+        assert error == {
+            "error": {
+                "message": "boom",
+                "type": "server_error",
+                "code": "all_failed",
+            }
+        }
+
+
+class TestChatMessageValidation:
+    def test_tool_message_requires_identifier(self):
+        with pytest.raises(ValueError, match="tool messages require tool_call_id or name"):
+            ChatMessage(role="tool", content="result")
+
+    def test_tool_message_accepts_tool_call_id(self):
+        message = ChatMessage(role="tool", content="result", tool_call_id="call-1")
+        assert message.tool_call_id == "call-1"
+
+
+class TestChatCompletionRequestValidation:
+    def test_model_must_not_be_empty(self):
+        with pytest.raises(ValueError, match="model must not be empty"):
+            ChatCompletionRequest(
+                model="   ",
+                messages=[ChatMessage(role="user", content="Hi")],
+            )
