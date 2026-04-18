@@ -18,9 +18,7 @@ def main():
         prog="ai-free-swap",
         description="OpenAI-compatible proxy routing through free-tier AI providers",
     )
-    parser.add_argument(
-        "--config", "-c", default="config.yaml", help="Path to config file"
-    )
+    parser.add_argument("--config", "-c", default="config.yaml", help="Path to config file")
     parser.add_argument("--host", default=None, help="Override server host")
     parser.add_argument("--port", type=int, default=None, help="Override server port")
     parser.add_argument(

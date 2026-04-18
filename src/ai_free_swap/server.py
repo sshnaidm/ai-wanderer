@@ -50,9 +50,7 @@ def create_app(config: AppConfig) -> FastAPI:
             kwargs["stop"] = request.stop
 
         if request.stream:
-            return EventSourceResponse(
-                _stream_response(router, lc_messages, kwargs, request.model)
-            )
+            return EventSourceResponse(_stream_response(router, lc_messages, kwargs, request.model))
 
         try:
             content = await router.route(lc_messages, **kwargs)
@@ -69,10 +67,7 @@ def create_app(config: AppConfig) -> FastAPI:
                 models.add(backend.model)
         return {
             "object": "list",
-            "data": [
-                {"id": m, "object": "model", "owned_by": "ai-free-swap"}
-                for m in sorted(models)
-            ],
+            "data": [{"id": m, "object": "model", "owned_by": "ai-free-swap"} for m in sorted(models)],
         }
 
     @app.get("/health")
@@ -100,15 +95,11 @@ async def _stream_response(router, lc_messages, kwargs, model):
         logger.error("All providers failed during stream: %s", e)
         yield {
             "event": "message",
-            "data": json.dumps(
-                make_stream_chunk(f"\n\n[Error: {e}]", request_id, model)
-            ),
+            "data": json.dumps(make_stream_chunk(f"\n\n[Error: {e}]", request_id, model)),
         }
 
     yield {
         "event": "message",
-        "data": json.dumps(
-            make_stream_chunk(None, request_id, model, finish_reason="stop")
-        ),
+        "data": json.dumps(make_stream_chunk(None, request_id, model, finish_reason="stop")),
     }
     yield {"data": "[DONE]"}

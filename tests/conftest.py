@@ -80,10 +80,12 @@ def single_backend_config():
 
 @pytest.fixture
 def multi_priority_config():
-    return make_config([
-        [{"model": "fail-1"}, {"model": "fail-2"}],
-        [{"model": "success"}],
-    ])
+    return make_config(
+        [
+            [{"model": "fail-1"}, {"model": "fail-2"}],
+            [{"model": "success"}],
+        ]
+    )
 
 
 @pytest.fixture

@@ -39,6 +39,7 @@ def failing_app():
     a = create_app(config)
     # Hack: make the router's providers fail
     from ai_free_swap.router import Router
+
     for group in a.state._state.get("router", Router).__dict__.get("priority_groups", []):
         for p in group:
             p.should_fail = True
@@ -57,10 +58,12 @@ class TestHealthEndpoint:
 class TestModelsEndpoint:
     @pytest.mark.asyncio
     async def test_list_models(self):
-        config = make_config([
-            [{"model": "gemini-2.5-flash"}, {"model": "gemini-2.5-flash-lite"}],
-            [{"model": "gpt-4o"}],
-        ])
+        config = make_config(
+            [
+                [{"model": "gemini-2.5-flash"}, {"model": "gemini-2.5-flash-lite"}],
+                [{"model": "gpt-4o"}],
+            ]
+        )
         app = create_app(config)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/v1/models")
@@ -74,9 +77,11 @@ class TestModelsEndpoint:
 
     @pytest.mark.asyncio
     async def test_models_deduplication(self):
-        config = make_config([
-            [{"model": "same-model"}, {"model": "same-model"}],
-        ])
+        config = make_config(
+            [
+                [{"model": "same-model"}, {"model": "same-model"}],
+            ]
+        )
         app = create_app(config)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/v1/models")
@@ -138,12 +143,14 @@ class TestChatCompletions:
         # Instead, create config with an unknown provider to test error path
         # Actually, let's just test with a properly failing setup
         from ai_free_swap.router import Router
+
         config2 = make_config([[{}]])
         app2 = create_app(config2)
 
         # Patch the router inside the app to make all providers fail
         from unittest.mock import patch, AsyncMock
         from ai_free_swap.router import AllProvidersFailedError
+
         with patch.object(Router, "route", side_effect=AllProvidersFailedError([("fake", RuntimeError("fail"))])):
             async with AsyncClient(transport=ASGITransport(app=app2), base_url="http://test") as ac:
                 resp = await ac.post("/v1/chat/completions", json=_chat_payload())
@@ -182,7 +189,7 @@ class TestStreamingCompletions:
             if not line or line.startswith("event:"):
                 continue
             if line.startswith("data:"):
-                data = line[len("data:"):].strip()
+                data = line[len("data:") :].strip()
                 if data == "[DONE]":
                     continue
                 parsed = json.loads(data)
@@ -197,7 +204,7 @@ class TestStreamingCompletions:
                 json=_chat_payload(stream=True),
             )
         data_lines = [
-            line[len("data:"):].strip()
+            line[len("data:") :].strip()
             for line in resp.text.strip().split("\n")
             if line.strip().startswith("data:") and "[DONE]" not in line
         ]
@@ -212,7 +219,7 @@ class TestStreamingCompletions:
                 json=_chat_payload(stream=True),
             )
         data_lines = [
-            line[len("data:"):].strip()
+            line[len("data:") :].strip()
             for line in resp.text.strip().split("\n")
             if line.strip().startswith("data:") and "[DONE]" not in line
         ]
@@ -264,5 +271,6 @@ class TestAuthentication:
 class TestProviderRegistry:
     def test_all_providers_registered(self):
         from ai_free_swap.providers.base import PROVIDER_REGISTRY
+
         expected = {"gemini", "openai", "anthropic", "qwen", "openrouter", "openai_compat", "fake"}
         assert expected.issubset(set(PROVIDER_REGISTRY.keys()))

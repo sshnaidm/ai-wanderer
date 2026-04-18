@@ -14,6 +14,7 @@ def register_provider(name: str):
     def decorator(cls: type[BaseProvider]):
         PROVIDER_REGISTRY[name] = cls
         return cls
+
     return decorator
 
 

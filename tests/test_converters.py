@@ -23,12 +23,14 @@ class TestOpenaiToLangchain:
         assert isinstance(msgs[0], AIMessage)
 
     def test_multi_turn_conversation(self):
-        msgs = openai_to_langchain([
-            ChatMessage(role="system", content="Be brief"),
-            ChatMessage(role="user", content="Hi"),
-            ChatMessage(role="assistant", content="Hello"),
-            ChatMessage(role="user", content="Bye"),
-        ])
+        msgs = openai_to_langchain(
+            [
+                ChatMessage(role="system", content="Be brief"),
+                ChatMessage(role="user", content="Hi"),
+                ChatMessage(role="assistant", content="Hello"),
+                ChatMessage(role="user", content="Bye"),
+            ]
+        )
         assert len(msgs) == 4
         assert isinstance(msgs[0], SystemMessage)
         assert isinstance(msgs[1], HumanMessage)

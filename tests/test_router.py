@@ -138,6 +138,7 @@ class TestRouterRoute:
                     mock = MagicMock()
                     mock.ainvoke = AsyncMock(side_effect=RuntimeError("fail"))
                     return mock
+
                 return create
 
             provider.create_chat_model = make_create(i, provider)

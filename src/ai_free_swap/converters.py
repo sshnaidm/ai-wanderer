@@ -4,7 +4,6 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from .models import ChatMessage
 
-
 _ROLE_MAP = {
     "system": SystemMessage,
     "user": HumanMessage,

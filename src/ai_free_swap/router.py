@@ -31,8 +31,7 @@ class Router:
                 cls = PROVIDER_REGISTRY.get(backend.provider)
                 if cls is None:
                     raise ValueError(
-                        f"Unknown provider {backend.provider!r}. "
-                        f"Available: {', '.join(sorted(PROVIDER_REGISTRY))}"
+                        f"Unknown provider {backend.provider!r}. " f"Available: {', '.join(sorted(PROVIDER_REGISTRY))}"
                     )
                 providers.append(cls(backend))
             if providers:
@@ -66,9 +65,7 @@ class Router:
 
         raise AllProvidersFailedError(errors)
 
-    async def route_stream(
-        self, messages: list[BaseMessage], **kwargs
-    ) -> AsyncGenerator[str, None]:
+    async def route_stream(self, messages: list[BaseMessage], **kwargs) -> AsyncGenerator[str, None]:
         errors: list[tuple[str, Exception]] = []
 
         for cycle in range(self.keep_cycles):
