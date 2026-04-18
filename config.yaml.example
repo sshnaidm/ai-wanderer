@@ -1,0 +1,55 @@
+# ai-free-swap configuration
+# API keys can use ${ENV_VAR} syntax for environment variable expansion
+
+keep_cycles: 1  # How many full cycles through all priorities before returning failure
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+  api_key: ""  # Optional: set to require Bearer token auth on the proxy
+
+providers:
+  # Priority 1: tried first, backends within a group are tried in random order
+  - priority: 1
+    backends:
+      - provider: gemini
+        api_key: "${GEMINI_API_KEY_1}"
+        model: "gemini-2.5-flash"
+      - provider: gemini
+        api_key: "${GEMINI_API_KEY_2}"
+        model: "gemini-2.5-flash"
+      - provider: gemini
+        api_key: "${GEMINI_API_KEY_3}"
+        model: "gemini-2.5-flash-lite"
+
+  # Priority 2: tried if all priority 1 backends fail
+  - priority: 2
+    backends:
+      - provider: qwen
+        api_key: "${DASHSCOPE_API_KEY}"
+        model: "qwen-flash"
+
+  # Priority 3
+  - priority: 3
+    backends:
+      - provider: openrouter
+        api_key: "${OPENROUTER_API_KEY}"
+        model: "google/gemini-2.5-flash:free"
+      - provider: openrouter
+        api_key: "${OPENROUTER_API_KEY}"
+        model: "meta-llama/llama-4-scout:free"
+
+  # Priority 4
+  - priority: 4
+    backends:
+      - provider: anthropic
+        api_key: "${ANTHROPIC_API_KEY}"
+        model: "claude-sonnet-4-6"
+
+  # # Generic OpenAI-compatible provider (Groq, Together, etc.)
+  # - priority: 5
+  #   backends:
+  #     - provider: openai_compat
+  #       api_key: "${GROQ_API_KEY}"
+  #       model: "llama-3.3-70b-versatile"
+  #       base_url: "https://api.groq.com/openai/v1"

@@ -1,0 +1,8 @@
+__pycache__
+*.pyc
+*.egg-info
+.git
+.venv
+venv
+*.md
+config.yaml
