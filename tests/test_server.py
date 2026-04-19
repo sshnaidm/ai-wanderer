@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from ai_free_swap.router import AllProvidersFailedError, PreparedStream, RoutedResponse, Router
+from ai_free_swap.router import AllProvidersFailedError, PreparedStream, RoutedResponse, Router, StreamingProviderError
 from ai_free_swap.server import create_app
 
 from .conftest import make_config
@@ -248,6 +248,31 @@ class TestStreamingCompletions:
                 )
         data_lines = [line for line in _data_lines(response.text) if line != "[DONE]"]
         assert json.loads(data_lines[0])["model"] == "patched-model"
+
+
+    @pytest.mark.asyncio
+    async def test_stream_mid_generation_error_emits_done(self, app):
+        async def failing_chunks():
+            yield "partial "
+            raise StreamingProviderError("fake(test-model)")
+
+        prepare_mock = AsyncMock(
+            return_value=PreparedStream(
+                model="test-model",
+                provider_name="fake(test-model)",
+                chunks=failing_chunks(),
+            )
+        )
+        with patch.object(Router, "prepare_stream", prepare_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post(
+                    "/v1/chat/completions",
+                    json=_chat_payload(stream=True),
+                )
+        assert "[DONE]" in response.text
+        data_lines = [line for line in _data_lines(response.text) if line != "[DONE]"]
+        last_chunk = json.loads(data_lines[-1])
+        assert last_chunk["choices"][0]["finish_reason"] == "error"
 
 
 class TestAuthentication:

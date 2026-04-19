@@ -181,7 +181,9 @@ async def _stream_response(
             yield {"data": json.dumps(make_stream_chunk(text, request_id, prepared_stream.model))}
     except StreamingProviderError as e:
         logger.error("%s", e)
-        return
+        finish_reason = "error"
+    else:
+        finish_reason = "stop"
 
     yield {
         "data": json.dumps(
@@ -189,7 +191,7 @@ async def _stream_response(
                 None,
                 request_id,
                 prepared_stream.model,
-                finish_reason="stop",
+                finish_reason=finish_reason,
             )
         )
     }

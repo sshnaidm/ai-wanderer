@@ -160,6 +160,25 @@ providers:
         with pytest.raises(ValueError, match="restricted transport or credential keys"):
             load_config(path)
 
+    def test_allows_max_tokens_and_similar_in_extra(self, tmp_path):
+        path = _write_yaml(
+            tmp_path,
+            """
+providers:
+  - priority: 1
+    backends:
+      - provider: gemini
+        api_key: "key"
+        model: "gemini-2.5-flash"
+        extra:
+          max_tokens: 1024
+          max_output_tokens: 2048
+          token_budget: 500
+""",
+        )
+        backend = load_config(path).providers[0].backends[0]
+        assert backend.extra == {"max_tokens": 1024, "max_output_tokens": 2048, "token_budget": 500}
+
     def test_openai_compat_requires_base_url(self, tmp_path):
         path = _write_yaml(
             tmp_path,

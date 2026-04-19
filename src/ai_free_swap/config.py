@@ -8,23 +8,15 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-_RESTRICTED_EXTRA_TOKENS = (
+_RESTRICTED_EXTRA_KEYS = frozenset({
     "api_key",
-    "token",
     "secret",
     "password",
     "base_url",
     "api_base",
-    "endpoint",
-    "url",
-    "header",
-    "query",
-    "client",
-    "organization",
-    "project",
     "proxy",
     "transport",
-)
+})
 
 
 class BackendConfig(BaseModel):
@@ -58,7 +50,7 @@ class BackendConfig(BaseModel):
     @classmethod
     def _validate_extra(cls, value: dict[str, Any]) -> dict[str, Any]:
         blocked = sorted(
-            key for key in value if any(token in key.strip().lower() for token in _RESTRICTED_EXTRA_TOKENS)
+            key for key in value if key.strip().lower() in _RESTRICTED_EXTRA_KEYS
         )
         if blocked:
             blocked_list = ", ".join(blocked)
