@@ -88,6 +88,7 @@ class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     keep_cycles: int = Field(default=1, ge=1)
+    model_name: str = Field(default="aifree")
     server: ServerConfig = Field(default_factory=ServerConfig)
     providers: list[PriorityGroup] = Field(min_length=1)
 

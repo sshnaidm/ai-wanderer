@@ -4,6 +4,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -16,6 +17,7 @@ from .models import (
     make_completion_response,
     make_error_response,
     make_responses_response,
+    message_to_response_output,
     make_stream_chunk,
 )
 from .router import (
@@ -33,37 +35,34 @@ def create_app(config: AppConfig) -> FastAPI:
     app = FastAPI(title="ai-free-swap")
     router = Router(config)
     server_api_key = config.server.api_key
+    model_name = config.model_name
 
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
         if request.url.path == "/health":
             return await call_next(request)
         if server_api_key:
-            auth = request.headers.get("authorization", "")
-            token = auth.removeprefix("Bearer ").strip()
+            token = _extract_bearer_token(request.headers.get("authorization", ""))
             if token != server_api_key:
                 return _error_response(401, "Invalid API key", "auth_error")
         return await call_next(request)
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: ChatCompletionRequest):
-        logger.debug("POST /v1/chat/completions body=%s", request.model_dump(exclude_none=True))
-        if request.n not in (None, 1):
-            return _error_response(
-                400,
-                "Only n=1 is currently supported",
-                "invalid_request_error",
-                code="unsupported_parameter",
-            )
-
-        messages = [m.model_dump(exclude_none=True) for m in request.messages]
-        kwargs = _build_model_kwargs(request)
+        request_id = uuid.uuid4().hex[:8]
+        logger.debug(
+            "[%s] POST /v1/chat/completions model=%s stream=%s",
+            request_id, request.model, request.stream,
+        )
+        messages = request.to_messages()
+        kwargs = request.to_model_kwargs()
 
         if request.stream:
             try:
                 prepared_stream = await router.prepare_stream(
                     messages,
                     requested_model=request.model,
+                    request_id=request_id,
                     **kwargs,
                 )
             except NoMatchingProvidersError as e:
@@ -74,7 +73,8 @@ def create_app(config: AppConfig) -> FastAPI:
                     code="model_not_found",
                 )
             except AllProvidersFailedError as e:
-                logger.warning("All providers failed before stream start: %s", e.detail_summary)
+                logger.warning("[%s] All providers failed before stream start", request_id)
+                logger.debug("[%s] Provider failure details: %s", request_id, e.detail_summary)
                 return _error_response(
                     503,
                     "All configured providers failed",
@@ -88,6 +88,7 @@ def create_app(config: AppConfig) -> FastAPI:
             result = await router.route(
                 messages,
                 requested_model=request.model,
+                request_id=request_id,
                 **kwargs,
             )
         except NoMatchingProvidersError as e:
@@ -98,7 +99,8 @@ def create_app(config: AppConfig) -> FastAPI:
                 code="model_not_found",
             )
         except AllProvidersFailedError as e:
-            logger.warning("All providers failed: %s", e.detail_summary)
+            logger.warning("[%s] All providers failed", request_id)
+            logger.debug("[%s] Provider failure details: %s", request_id, e.detail_summary)
             return _error_response(
                 503,
                 "All configured providers failed",
@@ -106,12 +108,26 @@ def create_app(config: AppConfig) -> FastAPI:
                 code="all_providers_failed",
             )
 
-        logger.debug("Response from %s: %s", result.provider_name, result.content[:200])
-        return make_completion_response(result.content, result.model)
+        if result.raw_response is not None:
+            return result.raw_response
+
+        logger.debug(
+            "[%s] Response from %s: %s",
+            request_id, result.provider_name, result.content[:200],
+        )
+        return make_completion_response(
+            result.content,
+            result.model,
+            message=result.message,
+        )
 
     @app.post("/v1/responses")
     async def responses(request: ResponsesRequest):
-        logger.debug("POST /v1/responses body=%s", request.model_dump(exclude_none=True))
+        request_id = uuid.uuid4().hex[:8]
+        logger.debug(
+            "[%s] POST /v1/responses model=%s stream=%s",
+            request_id, request.model, request.stream,
+        )
         messages = request.to_messages()
         kwargs = request.to_model_kwargs()
 
@@ -120,6 +136,7 @@ def create_app(config: AppConfig) -> FastAPI:
                 prepared_stream = await router.prepare_stream(
                     messages,
                     requested_model=request.model,
+                    request_id=request_id,
                     **kwargs,
                 )
             except NoMatchingProvidersError as e:
@@ -130,7 +147,8 @@ def create_app(config: AppConfig) -> FastAPI:
                     code="model_not_found",
                 )
             except AllProvidersFailedError as e:
-                logger.warning("All providers failed before stream start: %s", e.detail_summary)
+                logger.warning("[%s] All providers failed before stream start", request_id)
+                logger.debug("[%s] Provider failure details: %s", request_id, e.detail_summary)
                 return _error_response(
                     503,
                     "All configured providers failed",
@@ -146,6 +164,7 @@ def create_app(config: AppConfig) -> FastAPI:
             result = await router.route(
                 messages,
                 requested_model=request.model,
+                request_id=request_id,
                 **kwargs,
             )
         except NoMatchingProvidersError as e:
@@ -156,7 +175,8 @@ def create_app(config: AppConfig) -> FastAPI:
                 code="model_not_found",
             )
         except AllProvidersFailedError as e:
-            logger.warning("All providers failed: %s", e.detail_summary)
+            logger.warning("[%s] All providers failed", request_id)
+            logger.debug("[%s] Provider failure details: %s", request_id, e.detail_summary)
             return _error_response(
                 503,
                 "All configured providers failed",
@@ -165,14 +185,19 @@ def create_app(config: AppConfig) -> FastAPI:
             )
 
         response_id = f"resp_{uuid.uuid4().hex[:24]}"
-        return make_responses_response(result.content, result.model, response_id)
+        return make_responses_response(
+            result.content,
+            result.model,
+            response_id,
+            message=result.message,
+        )
 
     @app.get("/v1/models")
     async def list_models():
         return {
             "object": "list",
             "data": [
-                {"id": "aifree", "object": "model", "owned_by": "ai-free-swap"}
+                {"id": model_name, "object": "model", "owned_by": "ai-free-swap"}
             ],
         }
 
@@ -183,23 +208,14 @@ def create_app(config: AppConfig) -> FastAPI:
     return app
 
 
-def _build_model_kwargs(request: ChatCompletionRequest) -> dict:
-    kwargs = {}
-    if request.temperature is not None:
-        kwargs["temperature"] = request.temperature
-    if request.top_p is not None:
-        kwargs["top_p"] = request.top_p
-    if request.max_tokens is not None:
-        kwargs["max_tokens"] = request.max_tokens
-    if request.stop is not None:
-        kwargs["stop"] = request.stop
-    if request.presence_penalty is not None:
-        kwargs["presence_penalty"] = request.presence_penalty
-    if request.frequency_penalty is not None:
-        kwargs["frequency_penalty"] = request.frequency_penalty
-    if request.user is not None:
-        kwargs["user"] = request.user
-    return kwargs
+def _extract_bearer_token(auth_header: str) -> str:
+    value = auth_header.strip()
+    if not value:
+        return ""
+    scheme, _, token = value.partition(" ")
+    if token and scheme.lower() == "bearer":
+        return token.strip()
+    return value
 
 
 def _error_response(
@@ -217,42 +233,57 @@ def _error_response(
 async def _stream_response(
     prepared_stream: PreparedStream,
 ) -> AsyncGenerator[dict[str, str], None]:
-    request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    chat_request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
 
-    yield {
-        "data": json.dumps(
-            make_stream_chunk(
-                None,
-                request_id,
-                prepared_stream.model,
-                role="assistant",
+    if not prepared_stream.raw_chunks:
+        yield {
+            "data": json.dumps(
+                make_stream_chunk(
+                    None,
+                    chat_request_id,
+                    prepared_stream.model,
+                    role="assistant",
+                )
             )
-        )
-    }
+        }
 
     try:
-        async for text in prepared_stream.chunks:
+        async for chunk in prepared_stream.chunks:
+            if isinstance(chunk, dict):
+                payload = dict(chunk)
+                payload.setdefault("model", prepared_stream.model)
+                yield {"data": json.dumps(payload)}
+                continue
             yield {
                 "data": json.dumps(
-                    make_stream_chunk(text, request_id, prepared_stream.model)
+                    make_stream_chunk(chunk, chat_request_id, prepared_stream.model)
                 )
             }
     except StreamingProviderError as e:
-        logger.error("%s", e)
-        finish_reason = "error"
+        logger.error("[%s] %s", prepared_stream.request_id, e)
+        if not prepared_stream.raw_chunks:
+            yield {
+                "data": json.dumps(
+                    make_stream_chunk(
+                        None,
+                        chat_request_id,
+                        prepared_stream.model,
+                        finish_reason="error",
+                    )
+                )
+            }
     else:
-        finish_reason = "stop"
-
-    yield {
-        "data": json.dumps(
-            make_stream_chunk(
-                None,
-                request_id,
-                prepared_stream.model,
-                finish_reason=finish_reason,
-            )
-        )
-    }
+        if not prepared_stream.raw_chunks:
+            yield {
+                "data": json.dumps(
+                    make_stream_chunk(
+                        None,
+                        chat_request_id,
+                        prepared_stream.model,
+                        finish_reason="stop",
+                    )
+                )
+            }
     yield {"data": "[DONE]"}
 
 
@@ -297,10 +328,13 @@ async def _responses_stream(
         "part": {"type": "output_text", "text": ""},
     })
 
-    full_text = []
+    full_text: list[str] = []
     status = "completed"
     try:
-        async for text in prepared_stream.chunks:
+        async for chunk in prepared_stream.chunks:
+            text = _extract_stream_text(chunk)
+            if not text:
+                continue
             full_text.append(text)
             yield _event("response.output_text.delta", {
                 "output_index": 0,
@@ -309,7 +343,7 @@ async def _responses_stream(
                 "delta": text,
             })
     except StreamingProviderError as e:
-        logger.error("%s", e)
+        logger.error("[%s] %s", prepared_stream.request_id, e)
         status = "incomplete"
 
     joined = "".join(full_text)
@@ -333,13 +367,43 @@ async def _responses_stream(
             "id": msg_id,
             "type": "message",
             "role": "assistant",
-            "status": "completed",
+            "status": status,
             "content": [{"type": "output_text", "text": joined}],
         },
     })
 
     yield _event("response.completed", {
-        "response": make_responses_response(joined, prepared_stream.model, response_id),
+        "response": make_responses_response(
+            joined,
+            prepared_stream.model,
+            response_id,
+            status=status,
+        ),
     })
 
     yield {"data": "[DONE]"}
+
+
+def _extract_stream_text(chunk: str | dict[str, Any]) -> str:
+    if isinstance(chunk, str):
+        return chunk
+    choices = chunk.get("choices")
+    if not isinstance(choices, list):
+        return ""
+    text_parts: list[str] = []
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        delta = choice.get("delta")
+        if not isinstance(delta, dict):
+            continue
+        content = delta.get("content")
+        if isinstance(content, str):
+            text_parts.append(content)
+        elif isinstance(content, list):
+            output_item, output_text = message_to_response_output(
+                {"role": delta.get("role", "assistant"), "content": content}
+            )
+            if output_item and output_text:
+                text_parts.append(output_text)
+    return "".join(text_parts)

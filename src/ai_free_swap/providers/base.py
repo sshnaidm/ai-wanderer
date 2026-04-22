@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
 
@@ -15,6 +17,13 @@ def register_provider(name: str):
     return decorator
 
 
+@dataclass(frozen=True)
+class ProviderResponse:
+    text: str = ""
+    message: dict[str, Any] | None = None
+    raw_response: dict[str, Any] | None = None
+
+
 class BaseProvider(ABC):
     def __init__(self, config: BackendConfig):
         self.config = config
@@ -22,14 +31,14 @@ class BaseProvider(ABC):
     @abstractmethod
     async def complete(
         self, messages: list[dict], **kwargs
-    ) -> str:
-        """Return the assistant's text response."""
+    ) -> str | ProviderResponse:
+        """Return an assistant response or the raw provider payload."""
 
     @abstractmethod
     async def stream(
         self, messages: list[dict], **kwargs
-    ) -> AsyncGenerator[str, None]:
-        """Yield text chunks."""
+    ) -> AsyncGenerator[str | dict[str, Any], None]:
+        """Yield text chunks or raw provider stream payloads."""
 
     @property
     def name(self) -> str:

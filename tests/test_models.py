@@ -1,11 +1,11 @@
-import pytest
-
 from ai_free_swap.models import (
     ChatCompletionRequest,
     ChatMessage,
+    ResponsesRequest,
     make_completion_response,
     make_error_response,
     make_stream_chunk,
+    message_to_response_output,
 )
 
 
@@ -25,6 +25,19 @@ class TestMakeCompletionResponse:
         assert resp.usage.prompt_tokens == 0
         assert resp.usage.completion_tokens == 0
         assert resp.usage.total_tokens == 0
+
+    def test_preserves_message_shape(self):
+        resp = make_completion_response(
+            None,
+            "test-model",
+            message={
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hello"}],
+                "tool_calls": [{"id": "call-1", "type": "function"}],
+            },
+        )
+        assert resp.choices[0].message.content == [{"type": "text", "text": "Hello"}]
+        assert resp.choices[0].message.tool_calls == [{"id": "call-1", "type": "function"}]
 
 
 class TestMakeStreamChunk:
@@ -58,20 +71,61 @@ class TestMakeErrorResponse:
         }
 
 
-class TestChatMessageValidation:
-    def test_tool_message_requires_identifier(self):
-        with pytest.raises(ValueError, match="tool messages require tool_call_id or name"):
-            ChatMessage(role="tool", content="result")
+class TestChatMessageModel:
+    def test_allows_developer_role_and_extra_fields(self):
+        message = ChatMessage(
+            role="developer",
+            content=[{"type": "text", "text": "Be brief"}],
+            tool_calls=[{"id": "call-1"}],
+        )
+        dumped = message.model_dump(exclude_none=True)
+        assert dumped["role"] == "developer"
+        assert dumped["content"] == [{"type": "text", "text": "Be brief"}]
+        assert dumped["tool_calls"] == [{"id": "call-1"}]
 
-    def test_tool_message_accepts_tool_call_id(self):
-        message = ChatMessage(role="tool", content="result", tool_call_id="call-1")
-        assert message.tool_call_id == "call-1"
+
+class TestChatCompletionRequest:
+    def test_blank_model_falls_back_to_aifree(self):
+        request = ChatCompletionRequest(
+            model="   ",
+            messages=[ChatMessage(role="user", content="Hi")],
+        )
+        assert request.model == "aifree"
+
+    def test_to_model_kwargs_preserves_unknown_fields(self):
+        request = ChatCompletionRequest(
+            model="test-model",
+            messages=[ChatMessage(role="user", content="Hi")],
+            tools=[{"type": "function", "function": {"name": "ping"}}],
+            temperatur=0.7,
+        )
+        kwargs = request.to_model_kwargs()
+        assert kwargs["tools"] == [{"type": "function", "function": {"name": "ping"}}]
+        assert kwargs["temperatur"] == 0.7
 
 
-class TestChatCompletionRequestValidation:
-    def test_model_must_not_be_empty(self):
-        with pytest.raises(ValueError, match="model must not be empty"):
-            ChatCompletionRequest(
-                model="   ",
-                messages=[ChatMessage(role="user", content="Hi")],
-            )
+class TestResponsesRequest:
+    def test_to_messages_accepts_non_dict_items(self):
+        request = ResponsesRequest(model="test-model", input=["Hello", {"role": "assistant", "content": "Hi"}])
+        assert request.to_messages() == [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+        ]
+
+    def test_blank_model_falls_back_to_aifree(self):
+        request = ResponsesRequest(model="   ", input="Hello")
+        assert request.model == "aifree"
+
+
+class TestResponseOutputMapping:
+    def test_message_to_response_output_preserves_tool_calls(self):
+        item, output_text = message_to_response_output(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hello"}],
+                "tool_calls": [{"id": "call-1", "type": "function"}],
+            }
+        )
+        assert item["tool_calls"] == [{"id": "call-1", "type": "function"}]
+        assert item["content"] == [{"type": "output_text", "text": "Hello"}]
+        assert output_text == "Hello"

@@ -69,6 +69,7 @@ class TestChatCompletions:
         assert data["object"] == "chat.completion"
         assert data["model"] == "test-model"
         assert data["choices"][0]["message"]["role"] == "assistant"
+        assert data["choices"][0]["message"]["content"] == "hello from fake"
         assert data["choices"][0]["finish_reason"] == "stop"
 
     @pytest.mark.asyncio
@@ -113,11 +114,19 @@ class TestChatCompletions:
         assert response.json()["choices"][0]["message"]["content"] == "hello from fake"
 
     @pytest.mark.asyncio
-    async def test_rejects_n_greater_than_one(self, app):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            response = await ac.post("/v1/chat/completions", json=_chat_payload(n=2))
-        assert response.status_code == 400
-        assert response.json()["error"]["code"] == "unsupported_parameter"
+    async def test_n_greater_than_one_is_forwarded(self, app):
+        route_mock = AsyncMock(
+            return_value=RoutedResponse(
+                content="patched",
+                model="test-model",
+                provider_name="fake(test-model)",
+            )
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post("/v1/chat/completions", json=_chat_payload(n=2))
+        assert response.status_code == 200
+        assert route_mock.await_args.kwargs["n"] == 2
 
     @pytest.mark.asyncio
     async def test_optional_params_are_forwarded(self, app):
@@ -157,6 +166,62 @@ class TestChatCompletions:
         assert kwargs["user"] == "user-123"
 
     @pytest.mark.asyncio
+    async def test_unknown_and_modern_params_are_forwarded(self, app):
+        route_mock = AsyncMock(
+            return_value=RoutedResponse(
+                content="patched",
+                model="test-model",
+                provider_name="fake(test-model)",
+            )
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post(
+                    "/v1/chat/completions",
+                    json=_chat_payload(
+                        tools=[{"type": "function", "function": {"name": "ping"}}],
+                        parallel_tool_calls=True,
+                        reasoning={"effort": "medium"},
+                    ),
+                )
+        assert response.status_code == 200
+        kwargs = route_mock.await_args.kwargs
+        assert kwargs["tools"] == [{"type": "function", "function": {"name": "ping"}}]
+        assert kwargs["parallel_tool_calls"] is True
+        assert kwargs["reasoning"] == {"effort": "medium"}
+
+    @pytest.mark.asyncio
+    async def test_accepts_developer_role_and_content_arrays(self, app):
+        route_mock = AsyncMock(
+            return_value=RoutedResponse(
+                content="patched",
+                model="test-model",
+                provider_name="fake(test-model)",
+            )
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": "test-model",
+                        "messages": [
+                            {
+                                "role": "developer",
+                                "content": [{"type": "text", "text": "Follow policy"}],
+                            }
+                        ],
+                    },
+                )
+        assert response.status_code == 200
+        assert route_mock.await_args.args[0] == [
+            {
+                "role": "developer",
+                "content": [{"type": "text", "text": "Follow policy"}],
+            }
+        ]
+
+    @pytest.mark.asyncio
     async def test_all_providers_failed_returns_generic_503(self, app):
         route_mock = AsyncMock(side_effect=AllProvidersFailedError([("fake", RuntimeError("super-secret"))]))
         with patch.object(Router, "route", route_mock):
@@ -167,22 +232,53 @@ class TestChatCompletions:
         assert "super-secret" not in response.text
 
     @pytest.mark.asyncio
-    async def test_missing_model_is_rejected(self, app):
+    async def test_missing_model_defaults_to_aifree(self, app):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.post(
                 "/v1/chat/completions",
                 json={"messages": [{"role": "user", "content": "Hi"}]},
             )
-        assert response.status_code == 422
+        assert response.status_code == 200
 
     @pytest.mark.asyncio
-    async def test_blank_model_is_rejected(self, app):
+    async def test_blank_model_defaults_to_aifree(self, app):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.post(
                 "/v1/chat/completions",
                 json=_chat_payload(model="   "),
             )
-        assert response.status_code == 422
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_raw_provider_response_is_returned_directly(self, app):
+        route_mock = AsyncMock(
+            return_value=RoutedResponse(
+                content="tool response",
+                model="test-model",
+                provider_name="fake(test-model)",
+                raw_response={
+                    "id": "chatcmpl-custom",
+                    "object": "chat.completion",
+                    "model": "test-model",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [{"id": "call-1", "type": "function"}],
+                            },
+                            "finish_reason": "tool_calls",
+                        }
+                    ],
+                },
+            )
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post("/v1/chat/completions", json=_chat_payload())
+        assert response.status_code == 200
+        assert response.json()["choices"][0]["message"]["tool_calls"] == [{"id": "call-1", "type": "function"}]
 
 
 class TestStreamingCompletions:
@@ -280,6 +376,26 @@ class TestAuthentication:
                 "/v1/chat/completions",
                 json=_chat_payload(),
                 headers={"Authorization": "Bearer secret-key"},
+            )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_lowercase_bearer_token_is_accepted(self, authed_app):
+        async with AsyncClient(transport=ASGITransport(app=authed_app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/v1/chat/completions",
+                json=_chat_payload(),
+                headers={"Authorization": "bearer secret-key"},
+            )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_raw_authorization_token_is_accepted(self, authed_app):
+        async with AsyncClient(transport=ASGITransport(app=authed_app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/v1/chat/completions",
+                json=_chat_payload(),
+                headers={"Authorization": "secret-key"},
             )
         assert response.status_code == 200
 
@@ -408,6 +524,54 @@ class TestResponsesAPI:
         assert events[0] == "response.created"
         assert "response.output_text.delta" in events
         assert events[-1] == "response.completed"
+
+    @pytest.mark.asyncio
+    async def test_response_streaming_marks_midstream_failure_incomplete(self, app):
+        async def failing_chunks():
+            yield "partial "
+            raise StreamingProviderError("fake(test-model)")
+
+        prepare_mock = AsyncMock(
+            return_value=PreparedStream(
+                model="test-model",
+                provider_name="fake(test-model)",
+                chunks=failing_chunks(),
+                request_id="req-1",
+            )
+        )
+        with patch.object(Router, "prepare_stream", prepare_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post(
+                    "/v1/responses",
+                    json={"model": "test-model", "input": "Hello", "stream": True},
+                )
+        assert response.status_code == 200
+        assert '"status": "incomplete"' in response.text or '"status":"incomplete"' in response.text
+
+    @pytest.mark.asyncio
+    async def test_response_preserves_message_shape_when_available(self, app):
+        route_mock = AsyncMock(
+            return_value=RoutedResponse(
+                content="Hello",
+                model="test-model",
+                provider_name="fake(test-model)",
+                message={
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Hello"}],
+                    "tool_calls": [{"id": "call-1", "type": "function"}],
+                },
+            )
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post(
+                    "/v1/responses",
+                    json={"model": "test-model", "input": "Hello"},
+                )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["output"][0]["tool_calls"] == [{"id": "call-1", "type": "function"}]
+        assert data["output"][0]["content"] == [{"type": "output_text", "text": "Hello"}]
 
     @pytest.mark.asyncio
     async def test_max_output_tokens_maps_to_max_tokens(self, app):
