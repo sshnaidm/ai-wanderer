@@ -29,10 +29,16 @@ def main():
     )
     args = parser.parse_args()
 
+    log_level = args.log_level.upper()
+
     logging.basicConfig(
-        level=getattr(logging, args.log_level.upper()),
+        level=getattr(logging, log_level),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    logging.getLogger("ai_free_swap").setLevel(getattr(logging, log_level))
+
+    for noisy in ("sse_starlette", "httpcore", "openai", "httpx"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     try:
         config = load_config(args.config)
@@ -44,7 +50,7 @@ def main():
     port = args.port or config.server.port
 
     app = create_app(config)
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=host, port=port, log_level=args.log_level)
 
 
 if __name__ == "__main__":

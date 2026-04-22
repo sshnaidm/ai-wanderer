@@ -3,7 +3,6 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-from langchain_core.messages import HumanMessage
 
 from ai_free_swap.router import (
     AllProvidersFailedError,
@@ -19,7 +18,7 @@ import ai_free_swap.providers  # noqa: F401
 
 @pytest.fixture
 def messages():
-    return [HumanMessage(content="Hello")]
+    return [{"role": "user", "content": "Hello"}]
 
 
 class TestRouterInit:
@@ -48,12 +47,10 @@ class TestRouterRoute:
     async def test_returns_actual_model_for_selected_backend(self, messages):
         router = Router(
             make_config(
-                [
-                    [
-                        {"model": "model-a", "response": "from a"},
-                        {"model": "model-b", "response": "from b"},
-                    ]
-                ]
+                [[
+                    {"model": "model-a", "response": "from a"},
+                    {"model": "model-b", "response": "from b"},
+                ]]
             )
         )
         result = await router.route(messages, requested_model="model-b")
@@ -75,22 +72,22 @@ class TestRouterRoute:
         with patch("ai_free_swap.router.random.sample", side_effect=lambda group, _: group):
             result = await router.route(messages)
         assert result.content == "same-priority success"
-        assert result.provider_name == "fake(test-model)"
+        assert result.provider_name == "fake(test-model@..-key)"
 
     @pytest.mark.asyncio
     async def test_keep_cycles_retries_until_success(self, messages):
         router = Router(make_config([[{"response": "finally"}]], keep_cycles=3))
         provider = router.priority_groups[0][0]
         attempts = 0
-        original_create = provider.create_chat_model
+        original_complete = provider.complete
 
-        def counting_create():
+        async def counting_complete(msgs, **kw):
             nonlocal attempts
             attempts += 1
             provider.should_fail = attempts < 3
-            return original_create()
+            return await original_complete(msgs, **kw)
 
-        provider.create_chat_model = counting_create
+        provider.complete = counting_complete
         result = await router.route(messages)
         assert result.content == "finally"
         assert attempts == 3

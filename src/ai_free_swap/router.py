@@ -5,9 +5,6 @@ import random
 from collections import defaultdict
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from dataclasses import dataclass
-from typing import Any
-
-from langchain_core.messages import BaseMessage
 
 from .config import AppConfig
 from .providers.base import PROVIDER_REGISTRY, BaseProvider
@@ -63,11 +60,14 @@ class Router:
                 cls = PROVIDER_REGISTRY.get(backend.provider)
                 if cls is None:
                     raise ValueError(
-                        f"Unknown provider {backend.provider!r}. " f"Available: {', '.join(sorted(PROVIDER_REGISTRY))}"
+                        f"Unknown provider {backend.provider!r}. "
+                        f"Available: {', '.join(sorted(PROVIDER_REGISTRY))}"
                     )
                 priority_map[group.priority].append(cls(backend))
 
-        self.priority_groups = [priority_map[priority] for priority in sorted(priority_map)]
+        self.priority_groups = [
+            priority_map[priority] for priority in sorted(priority_map)
+        ]
 
         logger.info(
             "Router initialized with %d priority groups, %d total backends",
@@ -77,7 +77,7 @@ class Router:
 
     async def route(
         self,
-        messages: list[BaseMessage],
+        messages: list[dict],
         *,
         requested_model: str | None = None,
         **kwargs,
@@ -86,12 +86,12 @@ class Router:
 
         for backend in self._iter_attempts(requested_model):
             try:
+                logger.debug("Trying %s with messages=%s kwargs=%s", backend.name, messages, kwargs)
                 logger.info("Trying %s", backend.name)
-                model = backend.create_chat_model()
-                result = await model.ainvoke(messages, **kwargs)
+                content = await backend.complete(messages, **kwargs)
                 logger.info("Success from %s", backend.name)
                 return RoutedResponse(
-                    content=self._coerce_text(getattr(result, "content", None)),
+                    content=content,
                     model=backend.config.model,
                     provider_name=backend.name,
                 )
@@ -103,7 +103,7 @@ class Router:
 
     async def prepare_stream(
         self,
-        messages: list[BaseMessage],
+        messages: list[dict],
         *,
         requested_model: str | None = None,
         **kwargs,
@@ -113,18 +113,15 @@ class Router:
         for backend in self._iter_attempts(requested_model):
             try:
                 logger.info("Trying %s (stream)", backend.name)
-                model = backend.create_chat_model()
-                stream = aiter(model.astream(messages, **kwargs))
+                stream = aiter(backend.stream(messages, **kwargs))
                 buffered: list[str] = []
                 while True:
                     try:
                         chunk = await anext(stream)
                     except StopAsyncIteration:
                         break
-
-                    text = self._coerce_text(getattr(chunk, "content", None))
-                    if text:
-                        buffered.append(text)
+                    if chunk:
+                        buffered.append(chunk)
                         break
 
                 logger.info("Streaming started from %s", backend.name)
@@ -149,17 +146,21 @@ class Router:
             for group in candidate_groups:
                 yield from random.sample(group, len(group))
 
-    def _get_candidate_groups(self, requested_model: str | None) -> list[list[BaseProvider]]:
+    def _get_candidate_groups(
+        self, requested_model: str | None
+    ) -> list[list[BaseProvider]]:
         normalized_model = self._normalize_requested_model(requested_model)
         if normalized_model is None:
             return self.priority_groups
 
         filtered_groups = [
-            [provider for provider in group if provider.config.model == normalized_model]
+            [p for p in group if p.config.model == normalized_model]
             for group in self.priority_groups
         ]
-        filtered_groups = [group for group in filtered_groups if group]
+        filtered_groups = [g for g in filtered_groups if g]
         if not filtered_groups:
+            available = [p.config.model for g in self.priority_groups for p in g]
+            logger.debug("Model %r not found, available models: %s", normalized_model, available)
             raise NoMatchingProvidersError(normalized_model)
         return filtered_groups
 
@@ -168,29 +169,13 @@ class Router:
         if requested_model is None:
             return None
         normalized = requested_model.strip()
-        if not normalized:
+        if not normalized or normalized == "aifree":
             return None
         return normalized
 
-    @staticmethod
-    def _coerce_text(content: Any) -> str:
-        if content is None:
-            return ""
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            parts: list[str] = []
-            for item in content:
-                if isinstance(item, str):
-                    parts.append(item)
-                elif isinstance(item, dict) and isinstance(item.get("text"), str):
-                    parts.append(item["text"])
-            return "".join(parts)
-        return str(content)
-
     async def _drain_stream(
         self,
-        stream: AsyncIterator[Any],
+        stream: AsyncIterator[str],
         buffered: list[str],
         backend: BaseProvider,
     ) -> AsyncGenerator[str, None]:
@@ -199,9 +184,8 @@ class Router:
 
         try:
             async for chunk in stream:
-                text = self._coerce_text(getattr(chunk, "content", None))
-                if text:
-                    yield text
+                if chunk:
+                    yield chunk
         except Exception as e:
             logger.error("Streaming interrupted from %s: %s", backend.name, e)
             raise StreamingProviderError(backend.name) from e

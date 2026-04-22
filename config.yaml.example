@@ -1,5 +1,8 @@
 # ai-free-swap configuration
 # API keys can use ${ENV_VAR} syntax for environment variable expansion
+#
+# All providers use their OpenAI-compatible endpoints (base_url is preset).
+# Only Anthropic uses its native API. Custom base_url overrides the preset.
 
 keep_cycles: 1  # How many full cycles through all priorities before returning failure
 
@@ -39,15 +42,22 @@ providers:
         api_key: "${OPENROUTER_API_KEY}"
         model: "meta-llama/llama-4-scout:free"
 
-  # Priority 4
+  # Priority 4: Grok (xAI)
   - priority: 4
+    backends:
+      - provider: grok
+        api_key: "${XAI_API_KEY}"
+        model: "grok-3-mini"
+
+  # Priority 5: Anthropic (uses native API, not OpenAI-compatible)
+  - priority: 5
     backends:
       - provider: anthropic
         api_key: "${ANTHROPIC_API_KEY}"
         model: "claude-sonnet-4-6"
 
   # # Generic OpenAI-compatible provider (Groq, Together, etc.)
-  # - priority: 5
+  # - priority: 6
   #   backends:
   #     - provider: openai_compat
   #       api_key: "${GROQ_API_KEY}"

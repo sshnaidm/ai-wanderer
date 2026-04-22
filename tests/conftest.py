@@ -3,39 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk
 
 from ai_free_swap.config import AppConfig, BackendConfig, PriorityGroup, ServerConfig
 from ai_free_swap.providers.base import BaseProvider, register_provider
 
 import ai_free_swap.providers  # noqa: F401
-
-
-class FakeChatModel:
-    def __init__(self, provider: "FakeProvider"):
-        self.provider = provider
-
-    async def ainvoke(self, messages, **kwargs):
-        self.provider.invoke_calls.append({"messages": messages, "kwargs": kwargs})
-        if self.provider.should_fail:
-            raise self.provider.fail_error or RuntimeError(f"{self.provider.name} forced failure")
-        return AIMessage(content=self.provider.response)
-
-    async def astream(self, messages, **kwargs):
-        self.provider.stream_calls.append({"messages": messages, "kwargs": kwargs})
-        if self.provider.should_fail and self.provider.stream_fail_after_chunks is None:
-            raise self.provider.fail_error or RuntimeError(f"{self.provider.name} forced failure")
-
-        chunks = self.provider.stream_chunks
-        if chunks is None:
-            chunks = [word + " " for word in self.provider.response.split()]
-
-        yielded = 0
-        for chunk in chunks:
-            yield AIMessageChunk(content=chunk)
-            yielded += 1
-            if self.provider.stream_fail_after_chunks is not None and yielded >= self.provider.stream_fail_after_chunks:
-                raise self.provider.fail_error or RuntimeError(f"{self.provider.name} stream interrupted")
 
 
 @register_provider("fake")
@@ -50,8 +22,30 @@ class FakeProvider(BaseProvider):
         self.invoke_calls: list[dict[str, Any]] = []
         self.stream_calls: list[dict[str, Any]] = []
 
-    def create_chat_model(self):
-        return FakeChatModel(self)
+    async def complete(self, messages: list[dict], **kwargs) -> str:
+        self.invoke_calls.append({"messages": messages, "kwargs": kwargs})
+        if self.should_fail:
+            raise self.fail_error or RuntimeError(f"{self.name} forced failure")
+        return self.response
+
+    async def stream(self, messages: list[dict], **kwargs):
+        self.stream_calls.append({"messages": messages, "kwargs": kwargs})
+        if self.should_fail and self.stream_fail_after_chunks is None:
+            raise self.fail_error or RuntimeError(f"{self.name} forced failure")
+
+        chunks = self.stream_chunks
+        if chunks is None:
+            chunks = [word + " " for word in self.response.split()]
+
+        yielded = 0
+        for chunk in chunks:
+            yield chunk
+            yielded += 1
+            if (
+                self.stream_fail_after_chunks is not None
+                and yielded >= self.stream_fail_after_chunks
+            ):
+                raise self.fail_error or RuntimeError(f"{self.name} stream interrupted")
 
 
 def make_config(

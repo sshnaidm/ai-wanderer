@@ -194,18 +194,18 @@ providers:
         with pytest.raises(ValueError, match="openai_compat backends require base_url"):
             load_config(path)
 
-    def test_non_openai_compat_rejects_base_url(self, tmp_path):
+    def test_base_url_allowed_on_any_provider(self, tmp_path):
         path = _write_yaml(
             tmp_path,
             """
 providers:
   - priority: 1
     backends:
-      - provider: openai
+      - provider: gemini
         api_key: "key"
-        model: "gpt-4o"
-        base_url: "https://api.example.com"
+        model: "gemini-2.5-flash"
+        base_url: "https://custom-proxy.example.com/v1"
 """,
         )
-        with pytest.raises(ValueError, match="base_url is only supported for openai_compat backends"):
-            load_config(path)
+        backend = load_config(path).providers[0].backends[0]
+        assert backend.base_url == "https://custom-proxy.example.com/v1"

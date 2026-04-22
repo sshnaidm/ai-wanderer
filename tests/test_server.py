@@ -48,28 +48,15 @@ class TestHealthEndpoint:
 
 class TestModelsEndpoint:
     @pytest.mark.asyncio
-    async def test_list_models(self):
-        app = create_app(
-            make_config(
-                [
-                    [{"model": "gemini-2.5-flash"}, {"model": "gemini-2.5-flash-lite"}],
-                    [{"model": "gpt-4o"}],
-                ]
-            )
-        )
+    async def test_list_models_returns_single_aifree(self, app):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.get("/v1/models")
         assert response.status_code == 200
-        model_ids = [model["id"] for model in response.json()["data"]]
-        assert model_ids == ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gpt-4o"]
-
-    @pytest.mark.asyncio
-    async def test_models_are_deduplicated(self):
-        app = create_app(make_config([[{"model": "same-model"}, {"model": "same-model"}]]))
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            response = await ac.get("/v1/models")
-        model_ids = [model["id"] for model in response.json()["data"]]
-        assert model_ids == ["same-model"]
+        data = response.json()
+        assert data["object"] == "list"
+        assert len(data["data"]) == 1
+        assert data["data"][0]["id"] == "aifree"
+        assert data["data"][0]["owned_by"] == "ai-free-swap"
 
 
 class TestChatCompletions:
@@ -114,6 +101,16 @@ class TestChatCompletions:
             )
         assert response.status_code == 400
         assert response.json()["error"]["code"] == "model_not_found"
+
+    @pytest.mark.asyncio
+    async def test_aifree_model_routes_to_any_backend(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/v1/chat/completions",
+                json=_chat_payload(model="aifree"),
+            )
+        assert response.status_code == 200
+        assert response.json()["choices"][0]["message"]["content"] == "hello from fake"
 
     @pytest.mark.asyncio
     async def test_rejects_n_greater_than_one(self, app):
@@ -300,6 +297,141 @@ class TestAuthentication:
         assert response.status_code == 200
 
 
+class TestResponsesAPI:
+    @pytest.mark.asyncio
+    async def test_basic_response_with_string_input(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/v1/responses",
+                json={"model": "test-model", "input": "Hello"},
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["object"] == "response"
+        assert data["status"] == "completed"
+        assert data["output_text"] is not None
+        assert data["output"][0]["type"] == "message"
+        assert data["output"][0]["role"] == "assistant"
+        assert data["output"][0]["content"][0]["type"] == "output_text"
+        assert data["id"].startswith("resp_")
+
+    @pytest.mark.asyncio
+    async def test_response_with_messages_input(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/v1/responses",
+                json={
+                    "model": "test-model",
+                    "input": [
+                        {"role": "user", "content": "Hi"},
+                        {"role": "assistant", "content": "Hello"},
+                        {"role": "user", "content": "Bye"},
+                    ],
+                },
+            )
+        assert response.status_code == 200
+        assert response.json()["object"] == "response"
+
+    @pytest.mark.asyncio
+    async def test_response_with_instructions(self, app):
+        route_mock = AsyncMock(
+            return_value=RoutedResponse(
+                content="instructed",
+                model="test-model",
+                provider_name="fake(test-model)",
+            )
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post(
+                    "/v1/responses",
+                    json={
+                        "model": "test-model",
+                        "input": "Hello",
+                        "instructions": "Be brief",
+                    },
+                )
+        assert response.status_code == 200
+        messages = route_mock.await_args.args[0]
+        assert messages[0] == {"role": "system", "content": "Be brief"}
+        assert messages[1] == {"role": "user", "content": "Hello"}
+
+    @pytest.mark.asyncio
+    async def test_response_unknown_model_returns_400(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/v1/responses",
+                json={"model": "missing-model", "input": "Hello"},
+            )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "model_not_found"
+
+    @pytest.mark.asyncio
+    async def test_response_503_when_all_fail(self, app):
+        route_mock = AsyncMock(
+            side_effect=AllProvidersFailedError([("fake", RuntimeError("fail"))])
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post(
+                    "/v1/responses",
+                    json={"model": "test-model", "input": "Hello"},
+                )
+        assert response.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_response_streaming(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/v1/responses",
+                json={"model": "test-model", "input": "Hello", "stream": True},
+            )
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers["content-type"]
+        assert "[DONE]" in response.text
+        # Check for expected event types
+        assert "response.created" in response.text
+        assert "response.output_text.delta" in response.text
+        assert "response.completed" in response.text
+
+    @pytest.mark.asyncio
+    async def test_response_streaming_has_correct_events(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/v1/responses",
+                json={"model": "test-model", "input": "Hello", "stream": True},
+            )
+        events = []
+        for line in response.text.strip().splitlines():
+            if line.startswith("event:"):
+                events.append(line[len("event:"):].strip())
+        assert events[0] == "response.created"
+        assert "response.output_text.delta" in events
+        assert events[-1] == "response.completed"
+
+    @pytest.mark.asyncio
+    async def test_max_output_tokens_maps_to_max_tokens(self, app):
+        route_mock = AsyncMock(
+            return_value=RoutedResponse(
+                content="ok",
+                model="test-model",
+                provider_name="fake(test-model)",
+            )
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                await ac.post(
+                    "/v1/responses",
+                    json={
+                        "model": "test-model",
+                        "input": "Hi",
+                        "max_output_tokens": 500,
+                    },
+                )
+        kwargs = route_mock.await_args.kwargs
+        assert kwargs["max_tokens"] == 500
+
+
 class TestProviderRegistry:
     def test_all_providers_registered(self):
         from ai_free_swap.providers.base import PROVIDER_REGISTRY
@@ -308,6 +440,7 @@ class TestProviderRegistry:
             "anthropic",
             "fake",
             "gemini",
+            "grok",
             "openai",
             "openai_compat",
             "openrouter",

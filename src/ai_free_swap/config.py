@@ -61,8 +61,6 @@ class BackendConfig(BaseModel):
     def _validate_provider_specific_fields(self) -> BackendConfig:
         if self.provider == "openai_compat" and not self.base_url:
             raise ValueError("openai_compat backends require base_url")
-        if self.base_url and self.provider != "openai_compat":
-            raise ValueError("base_url is only supported for openai_compat backends")
         return self
 
 
