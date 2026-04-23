@@ -24,6 +24,10 @@ test = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
+lint = [
+    "black>=24.0",
+    "flake8>=7.0",
+]
 
 [project.scripts]
 ai-free-swap = "ai_free_swap.main:main"

@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install black
+      - run: pip install ".[lint]"
       - run: black --check --line-length 120 .
 
   flake8:
@@ -23,5 +23,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install flake8
-      - run: flake8 --max-line-length 120 .
+      - run: pip install ".[lint]"
+      - run: flake8 .
