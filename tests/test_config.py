@@ -191,7 +191,7 @@ providers:
         model: "llama-3"
 """,
         )
-        with pytest.raises(ValueError, match="openai_compat backends require base_url"):
+        with pytest.raises(ValueError, match="openai_compat provider requires base_url"):
             load_config(path)
 
     def test_base_url_allowed_on_any_provider(self, tmp_path):

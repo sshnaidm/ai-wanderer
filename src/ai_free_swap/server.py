@@ -36,6 +36,7 @@ def create_app(config: AppConfig) -> FastAPI:
     router = Router(config)
     server_api_key = config.server.api_key
     model_name = config.model_name
+    show_provider = config.show_provider
 
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
@@ -52,7 +53,9 @@ def create_app(config: AppConfig) -> FastAPI:
         request_id = uuid.uuid4().hex[:8]
         logger.debug(
             "[%s] POST /v1/chat/completions model=%s stream=%s",
-            request_id, request.model, request.stream,
+            request_id,
+            request.model,
+            request.stream,
         )
         messages = request.to_messages()
         kwargs = request.to_model_kwargs()
@@ -82,7 +85,7 @@ def create_app(config: AppConfig) -> FastAPI:
                     code="all_providers_failed",
                 )
 
-            return EventSourceResponse(_stream_response(prepared_stream))
+            return EventSourceResponse(_stream_response(prepared_stream, show_provider))
 
         try:
             result = await router.route(
@@ -109,24 +112,34 @@ def create_app(config: AppConfig) -> FastAPI:
             )
 
         if result.raw_response is not None:
-            return result.raw_response
+            raw = result.raw_response
+            if show_provider:
+                raw = {**raw, "provider_name": result.display_name}
+            return raw
 
         logger.debug(
             "[%s] Response from %s: %s",
-            request_id, result.provider_name, result.content[:200],
+            request_id,
+            result.provider_name,
+            result.content[:200],
         )
-        return make_completion_response(
+        resp = make_completion_response(
             result.content,
             result.model,
             message=result.message,
         )
+        if show_provider:
+            return {**resp.model_dump(), "provider_name": result.display_name}
+        return resp
 
     @app.post("/v1/responses")
     async def responses(request: ResponsesRequest):
         request_id = uuid.uuid4().hex[:8]
         logger.debug(
             "[%s] POST /v1/responses model=%s stream=%s",
-            request_id, request.model, request.stream,
+            request_id,
+            request.model,
+            request.stream,
         )
         messages = request.to_messages()
         kwargs = request.to_model_kwargs()
@@ -156,9 +169,7 @@ def create_app(config: AppConfig) -> FastAPI:
                     code="all_providers_failed",
                 )
 
-            return EventSourceResponse(
-                _responses_stream(prepared_stream)
-            )
+            return EventSourceResponse(_responses_stream(prepared_stream, show_provider))
 
         try:
             result = await router.route(
@@ -185,20 +196,21 @@ def create_app(config: AppConfig) -> FastAPI:
             )
 
         response_id = f"resp_{uuid.uuid4().hex[:24]}"
-        return make_responses_response(
+        resp = make_responses_response(
             result.content,
             result.model,
             response_id,
             message=result.message,
         )
+        if show_provider:
+            resp["provider_name"] = result.display_name
+        return resp
 
     @app.get("/v1/models")
     async def list_models():
         return {
             "object": "list",
-            "data": [
-                {"id": model_name, "object": "model", "owned_by": "ai-free-swap"}
-            ],
+            "data": [{"id": model_name, "object": "model", "owned_by": "ai-free-swap"}],
         }
 
     @app.get("/health")
@@ -232,63 +244,59 @@ def _error_response(
 
 async def _stream_response(
     prepared_stream: PreparedStream,
+    show_provider: bool = True,
 ) -> AsyncGenerator[dict[str, str], None]:
     chat_request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    provider_fields = {"provider_name": prepared_stream.display_name} if show_provider else {}
 
     if not prepared_stream.raw_chunks:
-        yield {
-            "data": json.dumps(
-                make_stream_chunk(
-                    None,
-                    chat_request_id,
-                    prepared_stream.model,
-                    role="assistant",
-                )
-            )
-        }
+        chunk_data = make_stream_chunk(
+            None,
+            chat_request_id,
+            prepared_stream.model,
+            role="assistant",
+        )
+        yield {"data": json.dumps({**chunk_data, **provider_fields})}
 
     try:
         async for chunk in prepared_stream.chunks:
             if isinstance(chunk, dict):
                 payload = dict(chunk)
                 payload.setdefault("model", prepared_stream.model)
+                payload.update(provider_fields)
                 yield {"data": json.dumps(payload)}
                 continue
-            yield {
-                "data": json.dumps(
-                    make_stream_chunk(chunk, chat_request_id, prepared_stream.model)
-                )
-            }
+            chunk_data = make_stream_chunk(
+                chunk,
+                chat_request_id,
+                prepared_stream.model,
+            )
+            yield {"data": json.dumps({**chunk_data, **provider_fields})}
     except StreamingProviderError as e:
         logger.error("[%s] %s", prepared_stream.request_id, e)
         if not prepared_stream.raw_chunks:
-            yield {
-                "data": json.dumps(
-                    make_stream_chunk(
-                        None,
-                        chat_request_id,
-                        prepared_stream.model,
-                        finish_reason="error",
-                    )
-                )
-            }
+            chunk_data = make_stream_chunk(
+                None,
+                chat_request_id,
+                prepared_stream.model,
+                finish_reason="error",
+            )
+            yield {"data": json.dumps({**chunk_data, **provider_fields})}
     else:
         if not prepared_stream.raw_chunks:
-            yield {
-                "data": json.dumps(
-                    make_stream_chunk(
-                        None,
-                        chat_request_id,
-                        prepared_stream.model,
-                        finish_reason="stop",
-                    )
-                )
-            }
+            chunk_data = make_stream_chunk(
+                None,
+                chat_request_id,
+                prepared_stream.model,
+                finish_reason="stop",
+            )
+            yield {"data": json.dumps({**chunk_data, **provider_fields})}
     yield {"data": "[DONE]"}
 
 
 async def _responses_stream(
     prepared_stream: PreparedStream,
+    show_provider: bool = True,
 ) -> AsyncGenerator[dict[str, str], None]:
     response_id = f"resp_{uuid.uuid4().hex[:24]}"
     msg_id = f"msg_{uuid.uuid4().hex[:24]}"
@@ -301,32 +309,41 @@ async def _responses_stream(
         payload.setdefault("sequence_number", seq)
         return {"event": event_type, "data": json.dumps(payload)}
 
-    yield _event("response.created", {
-        "response": {
-            "id": response_id,
-            "object": "response",
-            "status": "in_progress",
-            "model": prepared_stream.model,
-            "output": [],
+    yield _event(
+        "response.created",
+        {
+            "response": {
+                "id": response_id,
+                "object": "response",
+                "status": "in_progress",
+                "model": prepared_stream.model,
+                "output": [],
+            },
         },
-    })
+    )
 
-    yield _event("response.output_item.added", {
-        "output_index": 0,
-        "item": {
-            "id": msg_id,
-            "type": "message",
-            "role": "assistant",
-            "status": "in_progress",
-            "content": [],
+    yield _event(
+        "response.output_item.added",
+        {
+            "output_index": 0,
+            "item": {
+                "id": msg_id,
+                "type": "message",
+                "role": "assistant",
+                "status": "in_progress",
+                "content": [],
+            },
         },
-    })
+    )
 
-    yield _event("response.content_part.added", {
-        "output_index": 0,
-        "content_index": 0,
-        "part": {"type": "output_text", "text": ""},
-    })
+    yield _event(
+        "response.content_part.added",
+        {
+            "output_index": 0,
+            "content_index": 0,
+            "part": {"type": "output_text", "text": ""},
+        },
+    )
 
     full_text: list[str] = []
     status = "completed"
@@ -336,50 +353,63 @@ async def _responses_stream(
             if not text:
                 continue
             full_text.append(text)
-            yield _event("response.output_text.delta", {
-                "output_index": 0,
-                "content_index": 0,
-                "item_id": msg_id,
-                "delta": text,
-            })
+            yield _event(
+                "response.output_text.delta",
+                {
+                    "output_index": 0,
+                    "content_index": 0,
+                    "item_id": msg_id,
+                    "delta": text,
+                },
+            )
     except StreamingProviderError as e:
         logger.error("[%s] %s", prepared_stream.request_id, e)
         status = "incomplete"
 
     joined = "".join(full_text)
 
-    yield _event("response.output_text.done", {
-        "output_index": 0,
-        "content_index": 0,
-        "item_id": msg_id,
-        "text": joined,
-    })
-
-    yield _event("response.content_part.done", {
-        "output_index": 0,
-        "content_index": 0,
-        "part": {"type": "output_text", "text": joined},
-    })
-
-    yield _event("response.output_item.done", {
-        "output_index": 0,
-        "item": {
-            "id": msg_id,
-            "type": "message",
-            "role": "assistant",
-            "status": status,
-            "content": [{"type": "output_text", "text": joined}],
+    yield _event(
+        "response.output_text.done",
+        {
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": msg_id,
+            "text": joined,
         },
-    })
+    )
 
-    yield _event("response.completed", {
-        "response": make_responses_response(
-            joined,
-            prepared_stream.model,
-            response_id,
-            status=status,
-        ),
-    })
+    yield _event(
+        "response.content_part.done",
+        {
+            "output_index": 0,
+            "content_index": 0,
+            "part": {"type": "output_text", "text": joined},
+        },
+    )
+
+    yield _event(
+        "response.output_item.done",
+        {
+            "output_index": 0,
+            "item": {
+                "id": msg_id,
+                "type": "message",
+                "role": "assistant",
+                "status": status,
+                "content": [{"type": "output_text", "text": joined}],
+            },
+        },
+    )
+
+    final_resp = make_responses_response(
+        joined,
+        prepared_stream.model,
+        response_id,
+        status=status,
+    )
+    if show_provider:
+        final_resp["provider_name"] = prepared_stream.display_name
+    yield _event("response.completed", {"response": final_resp})
 
     yield {"data": "[DONE]"}
 

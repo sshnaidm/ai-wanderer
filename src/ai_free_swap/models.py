@@ -224,9 +224,7 @@ def make_responses_response(
     message: Mapping[str, Any] | None = None,
     status: str = "completed",
 ) -> dict[str, Any]:
-    output_item, output_text = message_to_response_output(
-        message or {"role": "assistant", "content": content}
-    )
+    output_item, output_text = message_to_response_output(message or {"role": "assistant", "content": content})
     output_item["status"] = status
     return {
         "id": response_id,

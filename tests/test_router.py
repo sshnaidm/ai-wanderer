@@ -10,6 +10,7 @@ from ai_free_swap.router import (
     Router,
     StreamingProviderError,
 )
+from ai_free_swap.providers.openai_compat import OpenAICompatProvider
 
 from .conftest import make_config
 
@@ -37,9 +38,40 @@ class TestRouterInit:
         assert len(router.priority_groups) == 2
         assert len(router.priority_groups[0]) == 2
 
-    def test_unknown_provider_raises(self):
+    def test_unknown_provider_without_base_url_raises(self):
         with pytest.raises(ValueError, match="Unknown provider 'nonexistent_xyz'"):
             Router(make_config([[{"provider": "nonexistent_xyz"}]]))
+
+    def test_unknown_provider_with_base_url_uses_openai_compat(self):
+        router = Router(
+            make_config(
+                [
+                    [
+                        {
+                            "provider": "my_custom_llm",
+                            "base_url": "https://custom.example.com/v1",
+                        }
+                    ]
+                ]
+            )
+        )
+        assert len(router.priority_groups) == 1
+        backend = router.priority_groups[0][0]
+        assert isinstance(backend, OpenAICompatProvider)
+        assert backend.config.provider == "my_custom_llm"
+        assert backend.config.base_url == "https://custom.example.com/v1"
+
+    def test_custom_name_appears_in_label(self):
+        router = Router(make_config([[{"name": "fast-gemini"}]]))
+        backend = router.priority_groups[0][0]
+        label = router._label(backend)
+        assert label == "test-model/fast-gemini-1"
+
+    def test_label_without_name_uses_model(self):
+        router = Router(make_config([[{}]]))
+        backend = router.priority_groups[0][0]
+        label = router._label(backend)
+        assert label == "test-model-1"
 
 
 class TestRouterRoute:
@@ -47,10 +79,12 @@ class TestRouterRoute:
     async def test_returns_actual_model_for_selected_backend(self, messages):
         router = Router(
             make_config(
-                [[
-                    {"model": "model-a", "response": "from a"},
-                    {"model": "model-b", "response": "from b"},
-                ]]
+                [
+                    [
+                        {"model": "model-a", "response": "from a"},
+                        {"model": "model-b", "response": "from b"},
+                    ]
+                ]
             )
         )
         result = await router.route(messages, requested_model="model-b")

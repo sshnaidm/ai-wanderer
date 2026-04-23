@@ -14,6 +14,7 @@ def register_provider(name: str):
     def decorator(cls: type[BaseProvider]):
         PROVIDER_REGISTRY[name] = cls
         return cls
+
     return decorator
 
 
@@ -29,15 +30,11 @@ class BaseProvider(ABC):
         self.config = config
 
     @abstractmethod
-    async def complete(
-        self, messages: list[dict], **kwargs
-    ) -> str | ProviderResponse:
+    async def complete(self, messages: list[dict], **kwargs) -> str | ProviderResponse:
         """Return an assistant response or the raw provider payload."""
 
     @abstractmethod
-    async def stream(
-        self, messages: list[dict], **kwargs
-    ) -> AsyncGenerator[str | dict[str, Any], None]:
+    async def stream(self, messages: list[dict], **kwargs) -> AsyncGenerator[str | dict[str, Any], None]:
         """Yield text chunks or raw provider stream payloads."""
 
     @property

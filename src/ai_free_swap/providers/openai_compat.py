@@ -52,6 +52,7 @@ def _make_openai_provider(provider_name: str):
     @register_provider(provider_name)
     class _Provider(OpenAICompatProvider):
         pass
+
     _Provider.__name__ = f"{provider_name.title()}Provider"
     _Provider.__qualname__ = _Provider.__name__
     return _Provider

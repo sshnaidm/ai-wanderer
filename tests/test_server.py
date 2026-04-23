@@ -280,6 +280,43 @@ class TestChatCompletions:
         assert response.status_code == 200
         assert response.json()["choices"][0]["message"]["tool_calls"] == [{"id": "call-1", "type": "function"}]
 
+    @pytest.mark.asyncio
+    async def test_response_includes_provider_name_by_default(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post("/v1/chat/completions", json=_chat_payload())
+        assert response.status_code == 200
+        assert response.json()["provider_name"] == "fake"
+
+    @pytest.mark.asyncio
+    async def test_response_excludes_provider_name_when_disabled(self):
+        cfg = make_config([[{"model": "test-model", "response": "hi"}]])
+        cfg.show_provider = False
+        app = create_app(cfg)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post("/v1/chat/completions", json=_chat_payload())
+        assert response.status_code == 200
+        assert "provider_name" not in response.json()
+
+    @pytest.mark.asyncio
+    async def test_response_uses_custom_backend_name(self):
+        app = create_app(
+            make_config(
+                [
+                    [
+                        {
+                            "model": "test-model",
+                            "response": "hi",
+                            "name": "my-custom",
+                        }
+                    ]
+                ]
+            )
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post("/v1/chat/completions", json=_chat_payload())
+        assert response.status_code == 200
+        assert response.json()["provider_name"] == "my-custom"
+
 
 class TestStreamingCompletions:
     @pytest.mark.asyncio
@@ -330,6 +367,7 @@ class TestStreamingCompletions:
             return_value=PreparedStream(
                 model="patched-model",
                 provider_name="fake(patched-model)",
+                display_name="fake",
                 chunks=fake_chunks(),
             )
         )
@@ -342,7 +380,6 @@ class TestStreamingCompletions:
         data_lines = [line for line in _data_lines(response.text) if line != "[DONE]"]
         assert json.loads(data_lines[0])["model"] == "patched-model"
 
-
     @pytest.mark.asyncio
     async def test_stream_mid_generation_error_emits_done(self, app):
         async def failing_chunks():
@@ -353,6 +390,7 @@ class TestStreamingCompletions:
             return_value=PreparedStream(
                 model="test-model",
                 provider_name="fake(test-model)",
+                display_name="fake",
                 chunks=failing_chunks(),
             )
         )
@@ -484,9 +522,7 @@ class TestResponsesAPI:
 
     @pytest.mark.asyncio
     async def test_response_503_when_all_fail(self, app):
-        route_mock = AsyncMock(
-            side_effect=AllProvidersFailedError([("fake", RuntimeError("fail"))])
-        )
+        route_mock = AsyncMock(side_effect=AllProvidersFailedError([("fake", RuntimeError("fail"))]))
         with patch.object(Router, "route", route_mock):
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 response = await ac.post(
@@ -520,7 +556,7 @@ class TestResponsesAPI:
         events = []
         for line in response.text.strip().splitlines():
             if line.startswith("event:"):
-                events.append(line[len("event:"):].strip())
+                events.append(line[len("event:") :].strip())
         assert events[0] == "response.created"
         assert "response.output_text.delta" in events
         assert events[-1] == "response.completed"
@@ -535,6 +571,7 @@ class TestResponsesAPI:
             return_value=PreparedStream(
                 model="test-model",
                 provider_name="fake(test-model)",
+                display_name="fake",
                 chunks=failing_chunks(),
                 request_id="req-1",
             )

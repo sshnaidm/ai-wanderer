@@ -26,7 +26,6 @@ class AllProvidersFailedError(Exception):
         return "; ".join(f"{name}: {e}" for name, e in self.errors)
 
 
-
 class NoMatchingProvidersError(Exception):
     def __init__(self, requested_model: str):
         self.requested_model = requested_model
@@ -44,6 +43,7 @@ class RoutedResponse:
     content: str
     model: str
     provider_name: str
+    display_name: str = ""
     message: dict[str, Any] | None = None
     raw_response: dict[str, Any] | None = None
 
@@ -52,6 +52,7 @@ class RoutedResponse:
 class PreparedStream:
     model: str
     provider_name: str
+    display_name: str
     chunks: AsyncGenerator[str | dict[str, Any], None]
     request_id: str = ""
     raw_chunks: bool = False
@@ -61,8 +62,8 @@ def _format_error(e: Exception) -> str:
     status = getattr(e, "status_code", None)
     msg = str(e)
     if status is not None:
-        return f"{status}, error message=\"{msg}\""
-    return f"error message=\"{msg}\""
+        return f'{status}, error message="{msg}"'
+    return f'error message="{msg}"'
 
 
 class Router:
@@ -75,24 +76,30 @@ class Router:
             for backend in group.backends:
                 cls = PROVIDER_REGISTRY.get(backend.provider)
                 if cls is None:
-                    raise ValueError(
-                        f"Unknown provider {backend.provider!r}. "
-                        f"Available: {', '.join(sorted(PROVIDER_REGISTRY))}"
-                    )
+                    if backend.base_url:
+                        cls = PROVIDER_REGISTRY["openai_compat"]
+                    else:
+                        raise ValueError(
+                            f"Unknown provider {backend.provider!r} and no base_url set. "
+                            f"Either use a known provider ({', '.join(sorted(PROVIDER_REGISTRY))}) "
+                            f"or set base_url for an OpenAI-compatible endpoint."
+                        )
                 priority_map[group.priority].append(cls(backend))
 
-        self.priority_groups = [
-            priority_map[priority] for priority in sorted(priority_map)
-        ]
+        self.priority_groups = [priority_map[priority] for priority in sorted(priority_map)]
 
         model_counter: dict[str, int] = defaultdict(int)
         self._backend_labels: dict[int, str] = {}
         for group in self.priority_groups:
             for backend in group:
-                model_counter[backend.config.model] += 1
-                self._backend_labels[id(backend)] = (
-                    f"{backend.config.model}-{model_counter[backend.config.model]}"
-                )
+                model = backend.config.model
+                model_counter[model] += 1
+                name = backend.config.name
+                if name:
+                    label = f"{model}/{name}-{model_counter[model]}"
+                else:
+                    label = f"{model}-{model_counter[model]}"
+                self._backend_labels[id(backend)] = label
 
         logger.info(
             "Router initialized with %d priority groups, %d total backends",
@@ -133,13 +140,16 @@ class Router:
                     content=content,
                     model=backend.config.model,
                     provider_name=backend.name,
+                    display_name=backend.config.name or backend.config.provider,
                     message=message,
                     raw_response=raw_response,
                 )
             except Exception as e:
                 logger.debug(
                     "[%s] Failed to process with %s - %s",
-                    request_id, label, _format_error(e),
+                    request_id,
+                    label,
+                    _format_error(e),
                 )
                 errors.append((backend.name, e))
 
@@ -177,6 +187,7 @@ class Router:
                 return PreparedStream(
                     model=backend.config.model,
                     provider_name=backend.name,
+                    display_name=backend.config.name or backend.config.provider,
                     chunks=self._drain_stream(stream, buffered, backend, request_id),
                     request_id=request_id,
                     raw_chunks=raw_chunks,
@@ -184,43 +195,51 @@ class Router:
             except Exception as e:
                 logger.debug(
                     "[%s] Failed to process with %s - %s",
-                    request_id, label, _format_error(e),
+                    request_id,
+                    label,
+                    _format_error(e),
                 )
                 errors.append((backend.name, e))
 
         raise AllProvidersFailedError(errors)
 
     def _iter_attempts(
-        self, requested_model: str | None, request_id: str,
+        self,
+        requested_model: str | None,
+        request_id: str,
     ) -> Iterator[BaseProvider]:
         candidate_groups = self._get_candidate_groups(requested_model, request_id)
 
         for cycle in range(self.keep_cycles):
             if cycle > 0:
                 logger.debug(
-                    "[%s] Starting cycle %d/%d", request_id, cycle + 1, self.keep_cycles,
+                    "[%s] Starting cycle %d/%d",
+                    request_id,
+                    cycle + 1,
+                    self.keep_cycles,
                 )
 
             for group in candidate_groups:
                 yield from random.sample(group, len(group))
 
     def _get_candidate_groups(
-        self, requested_model: str | None, request_id: str,
+        self,
+        requested_model: str | None,
+        request_id: str,
     ) -> list[list[BaseProvider]]:
         normalized_model = self._normalize_requested_model(requested_model)
         if normalized_model is None:
             return self.priority_groups
 
-        filtered_groups = [
-            [p for p in group if p.config.model == normalized_model]
-            for group in self.priority_groups
-        ]
+        filtered_groups = [[p for p in group if p.config.model == normalized_model] for group in self.priority_groups]
         filtered_groups = [g for g in filtered_groups if g]
         if not filtered_groups:
             available = [p.config.model for g in self.priority_groups for p in g]
             logger.debug(
                 "[%s] Model %r not found, available models: %s",
-                request_id, normalized_model, available,
+                request_id,
+                normalized_model,
+                available,
             )
             raise NoMatchingProvidersError(normalized_model)
         return filtered_groups
@@ -250,6 +269,9 @@ class Router:
         except Exception as e:
             label = self._label(backend)
             logger.error(
-                "[%s] Streaming interrupted from %s: %s", request_id, label, e,
+                "[%s] Streaming interrupted from %s: %s",
+                request_id,
+                label,
+                e,
             )
             raise StreamingProviderError(backend.name) from e

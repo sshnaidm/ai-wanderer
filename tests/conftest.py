@@ -41,10 +41,7 @@ class FakeProvider(BaseProvider):
         for chunk in chunks:
             yield chunk
             yielded += 1
-            if (
-                self.stream_fail_after_chunks is not None
-                and yielded >= self.stream_fail_after_chunks
-            ):
+            if self.stream_fail_after_chunks is not None and yielded >= self.stream_fail_after_chunks:
                 raise self.fail_error or RuntimeError(f"{self.name} stream interrupted")
 
 
@@ -76,6 +73,7 @@ def make_config(
                     provider=backend_data.get("provider", "fake"),
                     api_key=backend_data.get("api_key", "test-key"),
                     model=backend_data.get("model", "test-model"),
+                    name=backend_data.get("name"),
                     base_url=backend_data.get("base_url"),
                     extra=extra,
                 )

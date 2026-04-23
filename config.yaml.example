@@ -6,6 +6,7 @@
 
 keep_cycles: 1  # How many full cycles through all priorities before returning failure
 model_name: "aifree"  # Name returned by /v1/models and used as the default model alias
+show_provider: true  # Include provider_name in API responses
 
 server:
   host: "0.0.0.0"
@@ -17,9 +18,11 @@ providers:
   - priority: 1
     backends:
       - provider: gemini
+        name: "gemini-flash-1"
         api_key: "${GEMINI_API_KEY_1}"
         model: "gemini-2.5-flash"
       - provider: gemini
+        name: "gemini-flash-2"
         api_key: "${GEMINI_API_KEY_2}"
         model: "gemini-2.5-flash"
       - provider: gemini
@@ -57,10 +60,19 @@ providers:
         api_key: "${ANTHROPIC_API_KEY}"
         model: "claude-sonnet-4-6"
 
-  # # Generic OpenAI-compatible provider (Groq, Together, etc.)
+  # # Any OpenAI-compatible provider — just set base_url.
+  # # The provider name can be anything (used for logging).
   # - priority: 6
   #   backends:
-  #     - provider: openai_compat
+  #     - provider: groq
   #       api_key: "${GROQ_API_KEY}"
   #       model: "llama-3.3-70b-versatile"
   #       base_url: "https://api.groq.com/openai/v1"
+  #     - provider: together
+  #       api_key: "${TOGETHER_API_KEY}"
+  #       model: "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+  #       base_url: "https://api.together.xyz/v1"
+  #     - provider: ollama
+  #       api_key: "unused"
+  #       model: "llama3.2"
+  #       base_url: "http://localhost:11434/v1"

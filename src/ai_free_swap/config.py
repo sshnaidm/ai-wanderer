@@ -8,15 +8,17 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-_RESTRICTED_EXTRA_KEYS = frozenset({
-    "api_key",
-    "secret",
-    "password",
-    "base_url",
-    "api_base",
-    "proxy",
-    "transport",
-})
+_RESTRICTED_EXTRA_KEYS = frozenset(
+    {
+        "api_key",
+        "secret",
+        "password",
+        "base_url",
+        "api_base",
+        "proxy",
+        "transport",
+    }
+)
 
 
 class BackendConfig(BaseModel):
@@ -25,6 +27,7 @@ class BackendConfig(BaseModel):
     provider: str
     api_key: str
     model: str
+    name: str | None = None
     base_url: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
@@ -49,9 +52,7 @@ class BackendConfig(BaseModel):
     @field_validator("extra")
     @classmethod
     def _validate_extra(cls, value: dict[str, Any]) -> dict[str, Any]:
-        blocked = sorted(
-            key for key in value if key.strip().lower() in _RESTRICTED_EXTRA_KEYS
-        )
+        blocked = sorted(key for key in value if key.strip().lower() in _RESTRICTED_EXTRA_KEYS)
         if blocked:
             blocked_list = ", ".join(blocked)
             raise ValueError("extra contains restricted transport or credential keys: " f"{blocked_list}")
@@ -60,7 +61,7 @@ class BackendConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_provider_specific_fields(self) -> BackendConfig:
         if self.provider == "openai_compat" and not self.base_url:
-            raise ValueError("openai_compat backends require base_url")
+            raise ValueError("openai_compat provider requires base_url")
         return self
 
 
@@ -89,6 +90,7 @@ class AppConfig(BaseModel):
 
     keep_cycles: int = Field(default=1, ge=1)
     model_name: str = Field(default="aifree")
+    show_provider: bool = Field(default=True)
     server: ServerConfig = Field(default_factory=ServerConfig)
     providers: list[PriorityGroup] = Field(min_length=1)
 
