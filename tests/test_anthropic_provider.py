@@ -2,7 +2,6 @@ from ai_free_swap.providers.anthropic_provider import (
     _convert_content,
     _convert_image_url,
     _convert_messages,
-    _stringify_content,
 )
 
 
