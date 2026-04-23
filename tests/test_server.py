@@ -24,7 +24,7 @@ def _chat_payload(**overrides):
 
 
 def _data_lines(body: str) -> list[str]:
-    return [line[len("data:"):].strip() for line in body.strip().splitlines() if line.startswith("data:")]
+    return [line[len("data:") :].strip() for line in body.strip().splitlines() if line.startswith("data:")]
 
 
 @pytest.fixture
@@ -556,7 +556,7 @@ class TestResponsesAPI:
         events = []
         for line in response.text.strip().splitlines():
             if line.startswith("event:"):
-                events.append(line[len("event:"):].strip())
+                events.append(line[len("event:") :].strip())
         assert events[0] == "response.created"
         assert "response.output_text.delta" in events
         assert events[-1] == "response.completed"
