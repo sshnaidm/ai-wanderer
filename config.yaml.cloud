@@ -1,0 +1,19 @@
+# Cloud deployment config for ai-free-swap
+# All values use environment variables — set them in your hosting platform.
+# SERVER_API_KEY is required to protect your proxy from unauthorized access.
+
+keep_cycles: 2
+model_name: "aifree"
+show_provider: true
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+  api_key: "${SERVER_API_KEY}"
+
+providers:
+  - priority: 1
+    backends:
+      - provider: gemini
+        api_key: "${GEMINI_API_KEY}"
+        model: "gemini-2.5-flash"

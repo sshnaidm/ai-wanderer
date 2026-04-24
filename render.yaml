@@ -1,0 +1,11 @@
+services:
+  - type: web
+    runtime: docker
+    name: ai-free-swap
+    plan: free
+    dockerCommand: ai-free-swap --config /app/config.yaml
+    envVars:
+      - key: SERVER_API_KEY
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false
