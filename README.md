@@ -10,42 +10,37 @@ Anthropic, or any OpenAI-compatible service), assign priorities, and the proxy
 handles the rest. Your app talks to one local endpoint, and ai-free-swap finds a
 working provider behind the scenes.
 
+## One-Click Deploy
+
+Deploy your own instance directly from this repo -- no fork needed:
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/sshnaidm/ai-wanderer)
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/from?repoUrl=https://github.com/sshnaidm/ai-wanderer&envs=SERVER_API_KEY,GEMINI_API_KEY&optionalEnvs=GEMINI_API_KEY&SERVER_API_KEYDesc=Secret+key+to+protect+your+proxy+from+unauthorized+access&GEMINI_API_KEYDesc=Your+Google+Gemini+API+key+(get+one+at+aistudio.google.com/apikey))
+
+Both platforms auto-generate a `SERVER_API_KEY` to protect your instance.
+Add at least one provider API key (e.g., `GEMINI_API_KEY`) and you're live.
+
+See [Cloud Hosting Guide](docs/HOSTING.md) for more options (Fly.io, VPS,
+Oracle Cloud free tier).
+
 ---
 
 ## Table of Contents
 
 - [How It Works](#how-it-works)
 - [Quick Start](#quick-start)
-  - [1. Install](#1-install)
-  - [2. Get API Keys](#2-get-api-keys)
-  - [3. Configure](#3-configure)
-  - [4. Run](#4-run)
-  - [5. Send a Request](#5-send-a-request)
-- [Installation Methods](#installation-methods)
-  - [Install with pip](#install-with-pip)
-  - [Run with Docker](#run-with-docker)
-  - [Run from Source](#run-from-source)
+- [Installation](#installation)
 - [Configuration](#configuration)
-  - [Configuration File](#configuration-file)
   - [Top-Level Settings](#top-level-settings)
   - [Server Settings](#server-settings)
   - [Provider Settings](#provider-settings)
-  - [Using Environment Variables for API Keys](#using-environment-variables-for-api-keys)
+  - [Environment Variables for API Keys](#environment-variables-for-api-keys)
   - [Priority and Fallback](#priority-and-fallback)
   - [Custom OpenAI-Compatible Providers](#custom-openai-compatible-providers)
   - [Full Configuration Example](#full-configuration-example)
 - [Supported Providers](#supported-providers)
-- [API Reference](#api-reference)
-  - [Chat Completions](#chat-completions---post-v1chatcompletions)
-  - [Responses](#responses---post-v1responses)
-  - [List Models](#list-models---get-v1models)
-  - [Health Check](#health-check---get-health)
-  - [Streaming](#streaming)
-  - [Error Responses](#error-responses)
 - [Using with Applications](#using-with-applications)
-  - [OpenAI Python SDK](#openai-python-sdk)
-  - [curl](#curl)
-  - [Any OpenAI-Compatible Client](#any-openai-compatible-client)
 - [Command-Line Options](#command-line-options)
 - [Securing the Proxy](#securing-the-proxy)
 - [Troubleshooting](#troubleshooting)
@@ -91,11 +86,25 @@ Sign up for free API keys from one or more providers:
 
 | Provider | Sign Up |
 |----------|---------|
-| Google Gemini | https://aistudio.google.com/apikey |
-| Alibaba Qwen | https://dashscope.console.aliyun.com/ |
-| OpenRouter | https://openrouter.ai/keys |
-| xAI Grok | https://console.x.ai/ |
-| Anthropic | https://console.anthropic.com/ |
+| Google Gemini | <https://aistudio.google.com/apikey> |
+| Alibaba Qwen | <https://modelstudio.console.alibabacloud.com> (International)  <https://dashscope.console.aliyun.com/> (Chinese) |
+| OpenRouter | <https://openrouter.ai/keys> |
+| xAI Grok | <https://console.x.ai/> |
+| Anthropic | <https://platform.claude.com/settings/workspaces/default/keys/> |
+| Groq | <https://console.groq.com/keys> |
+| Mistral | <https://admin.mistral.ai/organization/api-keys> |
+| Cloudflare AI | <https://dash.cloudflare.com/?to=/:account/ai/workers-ai> |
+| Hugging Face | <https://huggingface.co/settings/tokens> |
+| Cohere | <https://dashboard.cohere.com/welcome/> |
+| Deepseek | <https://platform.deepseek.com/api_keys> |
+| Z.ai | <https://z.ai/manage-apikey/apikey-list> |
+| Moonshot (Kimi) | <https://platform.kimi.ai/console/api-keys> |
+| SiliconFlow | <https://cloud.siliconflow.com/account/ak> |
+| MiniMax | <https://platform.minimax.io/user-center/payment/token-plan> |
+
+These are just examples -- any service with an OpenAI-compatible API works
+(DeepSeek, GLM, Groq, Together, local Ollama, etc.). See
+[Custom OpenAI-Compatible Providers](#custom-openai-compatible-providers).
 
 ### 3. Configure
 
@@ -103,12 +112,7 @@ Sign up for free API keys from one or more providers:
 cp config.yaml.example config.yaml
 ```
 
-Open `config.yaml` in any text editor and replace the placeholder API keys
-with your actual keys. You can either paste the keys directly or use
-environment variables (see [Using Environment Variables](#using-environment-variables-for-api-keys)).
-
-At minimum, you need one provider with an API key. For example, if you only
-have a Gemini key:
+Open `config.yaml` and add your API keys. At minimum, you need one provider:
 
 ```yaml
 keep_cycles: 1
@@ -145,85 +149,44 @@ curl http://localhost:8000/v1/chat/completions \
   }'
 ```
 
-You should get a response like:
-
-```json
-{
-  "id": "chatcmpl-abc123",
-  "object": "chat.completion",
-  "model": "gemini-2.5-flash",
-  "choices": [{
-    "index": 0,
-    "message": {"role": "assistant", "content": "Hello! How can I help you?"},
-    "finish_reason": "stop"
-  }],
-  "provider_name": "gemini"
-}
-```
-
 ---
 
-## Installation Methods
-
-### Install with pip
+## Installation
 
 Requires **Python 3.11 or later**.
 
+### pip (recommended)
+
 ```bash
-# Install from the project directory
 pip install .
 
-# Or install in development mode (changes to source take effect immediately)
+# Or in development mode
 pip install -e .
 ```
 
 After installation, the `ai-free-swap` command is available system-wide.
 
-### Run with Docker
+### Docker
 
 ```bash
-# Build the image
 docker build -t ai-free-swap .
 
-# Run with your config file mounted in
 docker run -p 8000:8000 \
   -v /path/to/your/config.yaml:/app/config.yaml \
   -e GEMINI_API_KEY="your-key" \
   ai-free-swap
 ```
 
-If your config uses `${ENV_VAR}` syntax for API keys, pass the environment
-variables with `-e`:
+### From source
 
 ```bash
-docker run -p 8000:8000 \
-  -v /path/to/your/config.yaml:/app/config.yaml \
-  -e GEMINI_API_KEY_1="key1" \
-  -e GEMINI_API_KEY_2="key2" \
-  -e DASHSCOPE_API_KEY="key3" \
-  ai-free-swap
-```
-
-### Run from Source
-
-If you prefer not to install:
-
-```bash
-# Install dependencies
 pip install -r requirements.txt
-
-# Run directly
 python -m ai_free_swap --config config.yaml
-
-# Or use the shell wrapper
-./run.sh config.yaml
 ```
 
 ---
 
 ## Configuration
-
-### Configuration File
 
 The proxy is configured with a YAML file. Copy the example to get started:
 
@@ -257,7 +220,7 @@ and a list of backends:
 providers:
   - priority: 1           # Tried first
     backends:
-      - provider: gemini   # Provider type
+      - provider: gemini   # Provider type (or any label if base_url is set)
         api_key: "..."     # API key for this provider
         model: "gemini-2.5-flash"  # Model to use
 
@@ -272,17 +235,17 @@ Each backend supports these fields:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | Yes | Provider type (see [Supported Providers](#supported-providers)) or any name if `base_url` is set. |
+| `provider` | Yes | Provider type (see [Supported Providers](#supported-providers)) or any name you choose if `base_url` is set. |
 | `api_key` | Yes | API key. Supports `${ENV_VAR}` syntax. |
 | `model` | Yes | Model identifier to use with this provider. |
 | `name` | No | Friendly name for this backend. Shown in logs and in the `provider_name` response field. |
 | `base_url` | No | Override the provider's API URL. Required for custom/self-hosted providers. |
 | `extra` | No | Provider-specific options (e.g., `timeout`, `default_max_tokens`). |
 
-### Using Environment Variables for API Keys
+### Environment Variables for API Keys
 
 Instead of putting API keys directly in the config file, you can reference
-environment variables:
+environment variables with `${VAR_NAME}` syntax:
 
 ```yaml
 backends:
@@ -291,14 +254,23 @@ backends:
     model: "gemini-2.5-flash"
 ```
 
-Then set the variable before starting:
+The variable names are up to you -- use whatever makes sense:
+
+```yaml
+backends:
+  - provider: deepseek
+    api_key: "${MY_DEEPSEEK_KEY}"
+    model: "deepseek-chat"
+    base_url: "https://api.deepseek.com/v1"
+```
+
+Then set the variables before starting:
 
 ```bash
 export GEMINI_API_KEY="your-actual-key"
+export MY_DEEPSEEK_KEY="your-deepseek-key"
 ai-free-swap --config config.yaml
 ```
-
-This keeps secrets out of your config file.
 
 ### Priority and Fallback
 
@@ -338,28 +310,36 @@ providers:
         model: "qwen-flash"
 ```
 
-With this setup, a request first tries one of the three Gemini backends (random
-order). If all three fail, it tries Qwen. If Qwen also fails, it starts over
-(because `keep_cycles: 2`) and tries everything again before returning an error.
-
 ### Custom OpenAI-Compatible Providers
 
-Any service that speaks the OpenAI API format can be used. Just set `base_url`
-and use any name you like for `provider`:
+Any service with an OpenAI-compatible API works. Set `base_url` and use
+whatever name you want for `provider` -- the name is just a label for logs:
 
 ```yaml
 providers:
   - priority: 1
     backends:
+      # DeepSeek
+      - provider: deepseek
+        api_key: "${DEEPSEEK_KEY}"
+        model: "deepseek-chat"
+        base_url: "https://api.deepseek.com/v1"
+
+      # GLM (Zhipu AI)
+      - provider: glm
+        api_key: "${GLM_KEY}"
+        model: "glm-4-flash"
+        base_url: "https://open.bigmodel.cn/api/paas/v4"
+
       # Groq
       - provider: groq
-        api_key: "${GROQ_API_KEY}"
+        api_key: "${GROQ_KEY}"
         model: "llama-3.3-70b-versatile"
         base_url: "https://api.groq.com/openai/v1"
 
       # Together AI
       - provider: together
-        api_key: "${TOGETHER_API_KEY}"
+        api_key: "${TOGETHER_KEY}"
         model: "meta-llama/Llama-3.3-70B-Instruct-Turbo"
         base_url: "https://api.together.xyz/v1"
 
@@ -368,10 +348,13 @@ providers:
         api_key: "unused"
         model: "llama3.2"
         base_url: "http://localhost:11434/v1"
-```
 
-The `provider` name here (groq, together, ollama) is just a label used in logs
-and responses -- the proxy uses the `base_url` to know where to send requests.
+      # LM Studio
+      - provider: lmstudio
+        api_key: "unused"
+        model: "local-model"
+        base_url: "http://localhost:1234/v1"
+```
 
 ### Full Configuration Example
 
@@ -429,8 +412,7 @@ providers:
 
 ## Supported Providers
 
-These providers have built-in base URLs and work out of the box -- you only
-need an API key:
+These providers have built-in base URLs and work with just an API key:
 
 | Provider | `provider` value | Models (examples) |
 |----------|-----------------|-------------------|
@@ -441,184 +423,9 @@ need an API key:
 | OpenAI | `openai` | `gpt-4o-mini`, `gpt-4o` |
 | Anthropic | `anthropic` | `claude-sonnet-4-6`, `claude-haiku-4-5` |
 
-**Any other OpenAI-compatible service** can be added by setting `base_url` (see
-[Custom OpenAI-Compatible Providers](#custom-openai-compatible-providers)).
-
----
-
-## API Reference
-
-The proxy exposes an OpenAI-compatible API. Any tool or library that works with
-the OpenAI API works with ai-free-swap.
-
-### Chat Completions - `POST /v1/chat/completions`
-
-Standard OpenAI chat completions endpoint.
-
-**Request:**
-
-```json
-{
-  "model": "aifree",
-  "messages": [
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "What is 2+2?"}
-  ],
-  "temperature": 0.7,
-  "max_tokens": 1000,
-  "stream": false
-}
-```
-
-The `model` field can be:
-- `"aifree"` (or whatever you set `model_name` to) -- uses any available provider.
-- A specific backend model name (e.g., `"gemini-2.5-flash"`) -- only uses
-  providers configured with that model.
-
-**Supported parameters:** `temperature`, `top_p`, `n`, `stop`, `max_tokens`,
-`presence_penalty`, `frequency_penalty`, `tools`, `tool_choice`,
-`response_format`, `seed`, `user`, and others. Unknown parameters are forwarded
-to the provider.
-
-**Response:**
-
-```json
-{
-  "id": "chatcmpl-abc123",
-  "object": "chat.completion",
-  "created": 1234567890,
-  "model": "gemini-2.5-flash",
-  "choices": [{
-    "index": 0,
-    "message": {
-      "role": "assistant",
-      "content": "2+2 equals 4."
-    },
-    "finish_reason": "stop"
-  }],
-  "usage": {
-    "prompt_tokens": 0,
-    "completion_tokens": 0,
-    "total_tokens": 0
-  },
-  "provider_name": "gemini"
-}
-```
-
-The `model` field in the response shows the actual backend model that handled
-the request. The `provider_name` field (when `show_provider: true`) shows which
-provider was used.
-
-### Responses - `POST /v1/responses`
-
-OpenAI Responses API format.
-
-**Request:**
-
-```json
-{
-  "model": "aifree",
-  "input": "What is the capital of France?",
-  "instructions": "Answer concisely.",
-  "stream": false
-}
-```
-
-The `input` field accepts a string, an array of messages, or a message object.
-
-**Response:**
-
-```json
-{
-  "id": "resp_abc123",
-  "object": "response",
-  "created_at": 1234567890.123,
-  "model": "gemini-2.5-flash",
-  "status": "completed",
-  "output": [{
-    "type": "message",
-    "role": "assistant",
-    "status": "completed",
-    "content": [
-      {"type": "output_text", "text": "Paris."}
-    ]
-  }],
-  "output_text": "Paris.",
-  "provider_name": "gemini"
-}
-```
-
-### List Models - `GET /v1/models`
-
-Returns the configured model name.
-
-```json
-{
-  "object": "list",
-  "data": [
-    {"id": "aifree", "object": "model", "owned_by": "ai-free-swap"}
-  ]
-}
-```
-
-### Health Check - `GET /health`
-
-Returns `{"status": "ok"}` if the server is running. This endpoint does not
-require authentication.
-
-### Streaming
-
-Both `/v1/chat/completions` and `/v1/responses` support streaming by setting
-`"stream": true`. The proxy uses Server-Sent Events (SSE).
-
-**Chat completions streaming** sends chunks in standard OpenAI format:
-
-```
-data: {"id":"chatcmpl-abc","object":"chat.completion.chunk","model":"gemini-2.5-flash","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
-
-data: {"id":"chatcmpl-abc","object":"chat.completion.chunk","model":"gemini-2.5-flash","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}
-
-data: [DONE]
-```
-
-**Responses streaming** sends named events:
-
-```
-event: response.created
-data: {"type":"response.created","response":{"id":"resp_abc","status":"in_progress",...}}
-
-event: response.output_text.delta
-data: {"type":"response.output_text.delta","delta":"Hello",...}
-
-event: response.completed
-data: {"type":"response.completed","response":{...}}
-
-data: [DONE]
-```
-
-**Failover during streaming:** if a provider fails *before* sending any data,
-the proxy automatically tries the next provider. If a provider fails *after*
-sending partial data, the stream ends with an error (no failover mid-stream).
-
-### Error Responses
-
-| HTTP Code | When | Error Code |
-|-----------|------|------------|
-| 400 | Requested model not configured | `model_not_found` |
-| 401 | Invalid or missing API key | `auth_error` |
-| 503 | All providers failed | `all_providers_failed` |
-
-Error format:
-
-```json
-{
-  "error": {
-    "message": "All configured providers failed",
-    "type": "server_error",
-    "code": "all_providers_failed"
-  }
-}
-```
+**Any other OpenAI-compatible service** works too -- just set `base_url`.
+See [Custom OpenAI-Compatible Providers](#custom-openai-compatible-providers)
+for examples with DeepSeek, GLM, Groq, Together, Ollama, LM Studio, and more.
 
 ---
 
@@ -682,8 +489,9 @@ you just need to change two settings:
 - **API Base URL:** `http://localhost:8000/v1`
 - **Model:** `aifree` (or any backend model name you configured)
 
-This works with tools like LangChain, LlamaIndex, Continue, Cursor, Open
-Interpreter, and any other application that supports custom OpenAI endpoints.
+This works with tools like aider, cline, open-hands, continue, LangChain,
+LlamaIndex, Open Interpreter, and any other application that supports custom
+OpenAI endpoints.
 
 ---
 
@@ -739,32 +547,29 @@ The `/health` endpoint is always public (no key required).
 
 ## Troubleshooting
 
-**"Error loading config"**
-- Check that `config.yaml` exists and is valid YAML.
-- If using `${ENV_VAR}` in API keys, make sure the environment variables are set.
+**"Error loading config"** -- Check that `config.yaml` exists and is valid
+YAML. If using `${ENV_VAR}` syntax, make sure the environment variables are set.
 
-**"All configured providers failed" (503)**
-- Check that your API keys are valid and not expired.
-- Run with `--log-level debug` to see which providers were tried and why each
-  one failed.
-- Increase `keep_cycles` to retry more times.
+**"All configured providers failed" (503)** -- Check that your API keys are
+valid. Run with `--log-level debug` to see which providers were tried and why
+each failed. Increase `keep_cycles` to retry more times.
 
-**"Model 'xyz' is not configured" (400)**
-- The model name in your request doesn't match any configured backend model.
-- Use `"aifree"` (or your `model_name`) to use any available provider.
-- Check your config to see which models are configured.
+**"Model 'xyz' is not configured" (400)** -- The model name in your request
+doesn't match any configured backend. Use `"aifree"` to use any available
+provider, or check your config for the exact model names.
 
-**Server not reachable**
-- If running locally, check that the port isn't already in use.
-- If running in Docker, make sure you exposed the port with `-p 8000:8000`.
-- If `host` is set to `127.0.0.1`, the server only accepts local connections.
-  Change to `0.0.0.0` to accept connections from other machines.
+**Server not reachable** -- Check the port isn't already in use. In Docker,
+make sure you used `-p 8000:8000`. If `host` is `127.0.0.1`, the server only
+accepts local connections -- change to `0.0.0.0`.
 
-**Slow responses**
-- The proxy adds minimal overhead. Slow responses usually mean the provider
-  is slow or rate-limiting you.
-- Add more providers at the same priority level to distribute load.
-- Use `--log-level debug` to see timing per provider.
+---
+
+## Further Reading
+
+- [API Reference](docs/API.md) -- full endpoint documentation, request/response
+  formats, streaming protocol, error codes
+- [Cloud Hosting Guide](docs/HOSTING.md) -- deploy to Render, Railway, Fly.io,
+  or any VPS with step-by-step instructions
 
 ---
 
