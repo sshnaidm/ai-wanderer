@@ -261,3 +261,101 @@ def make_stream_chunk(
         "model": model,
         "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
     }
+
+
+# ---------------------------------------------------------------------------
+# Anthropic Messages API models
+# ---------------------------------------------------------------------------
+
+
+class AnthropicMessagesRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    model: str = "aifree"
+    messages: list[ChatMessage] = Field(default_factory=list)
+    max_tokens: int = 4096
+    system: Any = None
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    stop_sequences: list[str] | None = None
+    stream: bool = False
+    metadata: dict[str, Any] | None = None
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def _validate_model(cls, value: Any) -> str:
+        if value is None:
+            return "aifree"
+        return _normalize_model_name(str(value))
+
+    def to_messages(self) -> list[dict[str, Any]]:
+        msgs: list[dict[str, Any]] = []
+        if self.system:
+            if isinstance(self.system, str):
+                msgs.append({"role": "system", "content": self.system})
+            elif isinstance(self.system, list):
+                text_parts = []
+                for block in self.system:
+                    if isinstance(block, str):
+                        text_parts.append(block)
+                    elif isinstance(block, dict) and block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                msgs.append({"role": "system", "content": "\n\n".join(text_parts)})
+        for message in self.messages:
+            msgs.append(message.model_dump(exclude_none=True))
+        return msgs
+
+    def to_model_kwargs(self) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {}
+        kwargs["max_tokens"] = self.max_tokens
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
+        if self.top_p is not None:
+            kwargs["top_p"] = self.top_p
+        if self.top_k is not None:
+            kwargs["top_k"] = self.top_k
+        if self.stop_sequences is not None:
+            kwargs["stop"] = self.stop_sequences
+        return kwargs
+
+
+def make_anthropic_response(
+    content: Any,
+    model: str,
+    msg_id: str,
+    *,
+    stop_reason: str = "end_turn",
+) -> dict[str, Any]:
+    if isinstance(content, str):
+        content_blocks = [{"type": "text", "text": content}]
+    elif isinstance(content, list):
+        content_blocks = content
+    else:
+        content_blocks = [{"type": "text", "text": str(content) if content else ""}]
+    return {
+        "id": msg_id,
+        "type": "message",
+        "role": "assistant",
+        "content": content_blocks,
+        "model": model,
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+        },
+    }
+
+
+def make_anthropic_error_response(
+    message: str,
+    error_type: str,
+) -> dict[str, Any]:
+    return {
+        "type": "error",
+        "error": {
+            "type": error_type,
+            "message": message,
+        },
+    }

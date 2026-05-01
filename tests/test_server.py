@@ -633,6 +633,275 @@ class TestResponsesAPI:
         assert kwargs["max_tokens"] == 500
 
 
+class TestAnthropicMessages:
+    @pytest.mark.asyncio
+    async def test_basic_completion(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/v1/messages",
+                json={
+                    "model": "test-model",
+                    "max_tokens": 100,
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["type"] == "message"
+        assert data["role"] == "assistant"
+        assert data["model"] == "test-model"
+        assert data["stop_reason"] == "end_turn"
+        assert data["id"].startswith("msg_")
+        assert data["content"][0]["type"] == "text"
+        assert data["content"][0]["text"] == "hello from fake"
+
+    @pytest.mark.asyncio
+    async def test_system_message_forwarded(self, app):
+        route_mock = AsyncMock(
+            return_value=RoutedResponse(
+                content="with system",
+                model="test-model",
+                provider_name="fake(test-model)",
+            )
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                await ac.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 100,
+                        "system": "Be brief",
+                        "messages": [{"role": "user", "content": "Hi"}],
+                    },
+                )
+        messages = route_mock.await_args.args[0]
+        assert messages[0] == {"role": "system", "content": "Be brief"}
+        assert messages[1] == {"role": "user", "content": "Hi"}
+
+    @pytest.mark.asyncio
+    async def test_system_as_content_blocks(self, app):
+        route_mock = AsyncMock(
+            return_value=RoutedResponse(
+                content="ok",
+                model="test-model",
+                provider_name="fake(test-model)",
+            )
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                await ac.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 100,
+                        "system": [
+                            {"type": "text", "text": "Rule one"},
+                            {"type": "text", "text": "Rule two"},
+                        ],
+                        "messages": [{"role": "user", "content": "Hi"}],
+                    },
+                )
+        messages = route_mock.await_args.args[0]
+        assert messages[0] == {"role": "system", "content": "Rule one\n\nRule two"}
+
+    @pytest.mark.asyncio
+    async def test_stop_sequences_mapped_to_stop(self, app):
+        route_mock = AsyncMock(
+            return_value=RoutedResponse(
+                content="ok",
+                model="test-model",
+                provider_name="fake(test-model)",
+            )
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                await ac.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 100,
+                        "messages": [{"role": "user", "content": "Hi"}],
+                        "stop_sequences": ["END", "STOP"],
+                    },
+                )
+        kwargs = route_mock.await_args.kwargs
+        assert kwargs["stop"] == ["END", "STOP"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_model_returns_400(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/v1/messages",
+                json={
+                    "model": "missing-model",
+                    "max_tokens": 100,
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+            )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["type"] == "error"
+        assert data["error"]["type"] == "not_found_error"
+
+    @pytest.mark.asyncio
+    async def test_all_providers_failed_returns_529(self, app):
+        route_mock = AsyncMock(
+            side_effect=AllProvidersFailedError([("fake", RuntimeError("fail"))])
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 100,
+                        "messages": [{"role": "user", "content": "Hi"}],
+                    },
+                )
+        assert response.status_code == 529
+        assert response.json()["type"] == "error"
+        assert response.json()["error"]["type"] == "overloaded_error"
+
+    @pytest.mark.asyncio
+    async def test_streaming_returns_correct_events(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/v1/messages",
+                json={
+                    "model": "test-model",
+                    "max_tokens": 100,
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "stream": True,
+                },
+            )
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers["content-type"]
+
+        events = []
+        for line in response.text.strip().splitlines():
+            if line.startswith("event:"):
+                events.append(line[len("event:"):].strip())
+        assert events[0] == "message_start"
+        assert events[1] == "content_block_start"
+        assert "content_block_delta" in events
+        assert "content_block_stop" in events
+        assert "message_delta" in events
+        assert events[-1] == "message_stop"
+
+    @pytest.mark.asyncio
+    async def test_streaming_message_start_has_model(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/v1/messages",
+                json={
+                    "model": "test-model",
+                    "max_tokens": 100,
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "stream": True,
+                },
+            )
+        for line in response.text.strip().splitlines():
+            if line.startswith("data:") and "message_start" in line:
+                data = json.loads(line[len("data:"):].strip())
+                assert data["message"]["model"] == "test-model"
+                assert data["message"]["role"] == "assistant"
+                break
+
+    @pytest.mark.asyncio
+    async def test_streaming_mid_error_sets_error_stop_reason(self, app):
+        async def failing_chunks():
+            yield "partial "
+            raise StreamingProviderError("fake(test-model)")
+
+        prepare_mock = AsyncMock(
+            return_value=PreparedStream(
+                model="test-model",
+                provider_name="fake(test-model)",
+                display_name="fake",
+                chunks=failing_chunks(),
+                request_id="req-1",
+            )
+        )
+        with patch.object(Router, "prepare_stream", prepare_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 100,
+                        "messages": [{"role": "user", "content": "Hi"}],
+                        "stream": True,
+                    },
+                )
+        assert response.status_code == 200
+        for line in response.text.strip().splitlines():
+            if line.startswith("data:") and "message_delta" in line:
+                data = json.loads(line[len("data:"):].strip())
+                assert data["delta"]["stop_reason"] == "error"
+                break
+
+    @pytest.mark.asyncio
+    async def test_response_includes_provider_name(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/v1/messages",
+                json={
+                    "model": "test-model",
+                    "max_tokens": 100,
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+            )
+        assert response.status_code == 200
+        assert response.json()["provider_name"] == "fake"
+
+    @pytest.mark.asyncio
+    async def test_x_api_key_auth_accepted(self, authed_app):
+        async with AsyncClient(
+            transport=ASGITransport(app=authed_app), base_url="http://test"
+        ) as ac:
+            response = await ac.post(
+                "/v1/messages",
+                json={
+                    "model": "test-model",
+                    "max_tokens": 100,
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+                headers={"x-api-key": "secret-key"},
+            )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_x_api_key_auth_rejected_wrong_key(self, authed_app):
+        async with AsyncClient(
+            transport=ASGITransport(app=authed_app), base_url="http://test"
+        ) as ac:
+            response = await ac.post(
+                "/v1/messages",
+                json={
+                    "model": "test-model",
+                    "max_tokens": 100,
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+                headers={"x-api-key": "wrong-key"},
+            )
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_aifree_model_routes_to_any_backend(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/v1/messages",
+                json={
+                    "model": "aifree",
+                    "max_tokens": 100,
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+            )
+        assert response.status_code == 200
+        assert response.json()["content"][0]["text"] == "hello from fake"
+
+
 class TestProviderRegistry:
     def test_all_providers_registered(self):
         from ai_free_swap.providers.base import PROVIDER_REGISTRY
