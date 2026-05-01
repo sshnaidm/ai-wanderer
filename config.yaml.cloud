@@ -5,6 +5,7 @@
 keep_cycles: 2
 model_name: "aifree"
 show_provider: true
+model_routing: "any"
 
 server:
   host: "0.0.0.0"

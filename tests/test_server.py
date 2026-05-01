@@ -81,7 +81,8 @@ class TestChatCompletions:
                         {"model": "model-a", "response": "from a"},
                         {"model": "model-b", "response": "from b"},
                     ]
-                ]
+                ],
+                model_routing="match",
             )
         )
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -94,14 +95,14 @@ class TestChatCompletions:
         assert response.json()["choices"][0]["message"]["content"] == "from b"
 
     @pytest.mark.asyncio
-    async def test_unknown_model_returns_400(self, app):
+    async def test_unknown_model_falls_back_to_any_backend(self, app):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.post(
                 "/v1/chat/completions",
                 json=_chat_payload(model="missing-model"),
             )
-        assert response.status_code == 400
-        assert response.json()["error"]["code"] == "model_not_found"
+        assert response.status_code == 200
+        assert response.json()["choices"][0]["message"]["content"] == "hello from fake"
 
     @pytest.mark.asyncio
     async def test_aifree_model_routes_to_any_backend(self, app):
@@ -511,14 +512,14 @@ class TestResponsesAPI:
         assert messages[1] == {"role": "user", "content": "Hello"}
 
     @pytest.mark.asyncio
-    async def test_response_unknown_model_returns_400(self, app):
+    async def test_unknown_model_falls_back_to_any_backend(self, app):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.post(
                 "/v1/responses",
                 json={"model": "missing-model", "input": "Hello"},
             )
-        assert response.status_code == 400
-        assert response.json()["error"]["code"] == "model_not_found"
+        assert response.status_code == 200
+        assert response.json()["output_text"] is not None
 
     @pytest.mark.asyncio
     async def test_response_503_when_all_fail(self, app):
@@ -729,7 +730,7 @@ class TestAnthropicMessages:
         assert kwargs["stop"] == ["END", "STOP"]
 
     @pytest.mark.asyncio
-    async def test_unknown_model_returns_400(self, app):
+    async def test_unknown_model_falls_back_to_any_backend(self, app):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             response = await ac.post(
                 "/v1/messages",
@@ -739,16 +740,12 @@ class TestAnthropicMessages:
                     "messages": [{"role": "user", "content": "Hi"}],
                 },
             )
-        assert response.status_code == 400
-        data = response.json()
-        assert data["type"] == "error"
-        assert data["error"]["type"] == "not_found_error"
+        assert response.status_code == 200
+        assert response.json()["content"][0]["text"] == "hello from fake"
 
     @pytest.mark.asyncio
     async def test_all_providers_failed_returns_529(self, app):
-        route_mock = AsyncMock(
-            side_effect=AllProvidersFailedError([("fake", RuntimeError("fail"))])
-        )
+        route_mock = AsyncMock(side_effect=AllProvidersFailedError([("fake", RuntimeError("fail"))]))
         with patch.object(Router, "route", route_mock):
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 response = await ac.post(
@@ -781,7 +778,7 @@ class TestAnthropicMessages:
         events = []
         for line in response.text.strip().splitlines():
             if line.startswith("event:"):
-                events.append(line[len("event:"):].strip())
+                events.append(line[len("event:") :].strip())
         assert events[0] == "message_start"
         assert events[1] == "content_block_start"
         assert "content_block_delta" in events
@@ -803,7 +800,7 @@ class TestAnthropicMessages:
             )
         for line in response.text.strip().splitlines():
             if line.startswith("data:") and "message_start" in line:
-                data = json.loads(line[len("data:"):].strip())
+                data = json.loads(line[len("data:") :].strip())
                 assert data["message"]["model"] == "test-model"
                 assert data["message"]["role"] == "assistant"
                 break
@@ -837,7 +834,7 @@ class TestAnthropicMessages:
         assert response.status_code == 200
         for line in response.text.strip().splitlines():
             if line.startswith("data:") and "message_delta" in line:
-                data = json.loads(line[len("data:"):].strip())
+                data = json.loads(line[len("data:") :].strip())
                 assert data["delta"]["stop_reason"] == "error"
                 break
 
@@ -857,9 +854,7 @@ class TestAnthropicMessages:
 
     @pytest.mark.asyncio
     async def test_x_api_key_auth_accepted(self, authed_app):
-        async with AsyncClient(
-            transport=ASGITransport(app=authed_app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=authed_app), base_url="http://test") as ac:
             response = await ac.post(
                 "/v1/messages",
                 json={
@@ -873,9 +868,7 @@ class TestAnthropicMessages:
 
     @pytest.mark.asyncio
     async def test_x_api_key_auth_rejected_wrong_key(self, authed_app):
-        async with AsyncClient(
-            transport=ASGITransport(app=authed_app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=authed_app), base_url="http://test") as ac:
             response = await ac.post(
                 "/v1/messages",
                 json={
@@ -900,6 +893,540 @@ class TestAnthropicMessages:
             )
         assert response.status_code == 200
         assert response.json()["content"][0]["text"] == "hello from fake"
+
+    @pytest.mark.asyncio
+    async def test_tools_forwarded_as_openai_format(self, app):
+        route_mock = AsyncMock(
+            return_value=RoutedResponse(
+                content="ok",
+                model="test-model",
+                provider_name="fake(test-model)",
+            )
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                await ac.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 100,
+                        "messages": [{"role": "user", "content": "Hi"}],
+                        "tools": [
+                            {
+                                "name": "get_weather",
+                                "description": "Get weather",
+                                "input_schema": {
+                                    "type": "object",
+                                    "properties": {"location": {"type": "string"}},
+                                },
+                            }
+                        ],
+                    },
+                )
+        kwargs = route_mock.await_args.kwargs
+        assert kwargs["tools"] == [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                    },
+                },
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_tool_choice_any_mapped_to_required(self, app):
+        route_mock = AsyncMock(
+            return_value=RoutedResponse(
+                content="ok",
+                model="test-model",
+                provider_name="fake(test-model)",
+            )
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                await ac.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 100,
+                        "messages": [{"role": "user", "content": "Hi"}],
+                        "tools": [{"name": "t", "input_schema": {}}],
+                        "tool_choice": {"type": "tool", "name": "t"},
+                    },
+                )
+        kwargs = route_mock.await_args.kwargs
+        assert kwargs["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "t"},
+        }
+
+    @pytest.mark.asyncio
+    async def test_tool_result_messages_converted(self, app):
+        route_mock = AsyncMock(
+            return_value=RoutedResponse(
+                content="ok",
+                model="test-model",
+                provider_name="fake(test-model)",
+            )
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                await ac.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 100,
+                        "messages": [
+                            {"role": "user", "content": "What's the weather?"},
+                            {
+                                "role": "assistant",
+                                "content": [
+                                    {"type": "text", "text": "Let me check."},
+                                    {
+                                        "type": "tool_use",
+                                        "id": "toolu_1",
+                                        "name": "get_weather",
+                                        "input": {"location": "SF"},
+                                    },
+                                ],
+                            },
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "tool_result",
+                                        "tool_use_id": "toolu_1",
+                                        "content": "65 degrees",
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                )
+        messages = route_mock.await_args.args[0]
+        assert messages[0] == {"role": "user", "content": "What's the weather?"}
+        assert messages[1]["role"] == "assistant"
+        assert messages[1]["content"] == "Let me check."
+        assert messages[1]["tool_calls"][0]["id"] == "toolu_1"
+        assert messages[1]["tool_calls"][0]["function"]["name"] == "get_weather"
+        assert messages[2] == {
+            "role": "tool",
+            "tool_call_id": "toolu_1",
+            "content": "65 degrees",
+        }
+
+    @pytest.mark.asyncio
+    async def test_tool_use_response_format(self, app):
+        route_mock = AsyncMock(
+            return_value=RoutedResponse(
+                content="",
+                model="test-model",
+                provider_name="fake(test-model)",
+                message={
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "SF"}',
+                            },
+                        }
+                    ],
+                },
+            )
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 100,
+                        "messages": [{"role": "user", "content": "Weather?"}],
+                    },
+                )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["stop_reason"] == "tool_use"
+        assert data["content"][0]["type"] == "tool_use"
+        assert data["content"][0]["id"] == "call_1"
+        assert data["content"][0]["name"] == "get_weather"
+        assert data["content"][0]["input"] == {"location": "SF"}
+
+    @pytest.mark.asyncio
+    async def test_tool_use_response_with_text_and_tool(self, app):
+        route_mock = AsyncMock(
+            return_value=RoutedResponse(
+                content="Let me check.",
+                model="test-model",
+                provider_name="fake(test-model)",
+                message={
+                    "role": "assistant",
+                    "content": "Let me check.",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "SF"}',
+                            },
+                        }
+                    ],
+                },
+            )
+        )
+        with patch.object(Router, "route", route_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 100,
+                        "messages": [{"role": "user", "content": "Weather?"}],
+                    },
+                )
+        data = response.json()
+        assert data["stop_reason"] == "tool_use"
+        assert data["content"][0]["type"] == "text"
+        assert data["content"][0]["text"] == "Let me check."
+        assert data["content"][1]["type"] == "tool_use"
+
+    @pytest.mark.asyncio
+    async def test_streaming_tool_use_only(self, app):
+        async def tool_chunks():
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {"name": "get_weather", "arguments": ""},
+                                },
+                            ]
+                        }
+                    }
+                ],
+            }
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": '{"location"'}},
+                            ]
+                        }
+                    }
+                ],
+            }
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": ': "SF"}'}},
+                            ]
+                        }
+                    }
+                ],
+            }
+
+        prepare_mock = AsyncMock(
+            return_value=PreparedStream(
+                model="test-model",
+                provider_name="fake(test-model)",
+                display_name="fake",
+                chunks=tool_chunks(),
+                request_id="req-1",
+            )
+        )
+        with patch.object(Router, "prepare_stream", prepare_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 100,
+                        "messages": [{"role": "user", "content": "Weather?"}],
+                        "stream": True,
+                    },
+                )
+        assert response.status_code == 200
+        events = []
+        for line in response.text.strip().splitlines():
+            if line.startswith("event:"):
+                events.append(line[len("event:") :].strip())
+
+        assert "content_block_start" in events
+        assert "content_block_delta" in events
+        assert "content_block_stop" in events
+
+        for line in response.text.strip().splitlines():
+            if line.startswith("data:") and "content_block_start" in line:
+                data = json.loads(line[len("data:") :].strip())
+                if data.get("content_block", {}).get("type") == "tool_use":
+                    assert data["content_block"]["id"] == "call_1"
+                    assert data["content_block"]["name"] == "get_weather"
+                    break
+        else:
+            pytest.fail("No tool_use content_block_start found")
+
+        for line in response.text.strip().splitlines():
+            if line.startswith("data:") and "message_delta" in line:
+                data = json.loads(line[len("data:") :].strip())
+                assert data["delta"]["stop_reason"] == "tool_use"
+                break
+
+    @pytest.mark.asyncio
+    async def test_streaming_text_then_tool_use(self, app):
+        async def mixed_chunks():
+            yield "Let me "
+            yield "check. "
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {"name": "get_weather", "arguments": '{"location": "SF"}'},
+                                },
+                            ]
+                        }
+                    }
+                ],
+            }
+
+        prepare_mock = AsyncMock(
+            return_value=PreparedStream(
+                model="test-model",
+                provider_name="fake(test-model)",
+                display_name="fake",
+                chunks=mixed_chunks(),
+                request_id="req-1",
+            )
+        )
+        with patch.object(Router, "prepare_stream", prepare_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 100,
+                        "messages": [{"role": "user", "content": "Weather?"}],
+                        "stream": True,
+                    },
+                )
+        events = []
+        for line in response.text.strip().splitlines():
+            if line.startswith("event:"):
+                events.append(line[len("event:") :].strip())
+
+        assert events[0] == "message_start"
+        assert events.count("content_block_start") == 2
+        assert events.count("content_block_stop") == 2
+
+        block_starts = []
+        for line in response.text.strip().splitlines():
+            if line.startswith("data:") and "content_block_start" in line:
+                data = json.loads(line[len("data:") :].strip())
+                if data.get("type") == "content_block_start":
+                    block_starts.append(data)
+        assert block_starts[0]["content_block"]["type"] == "text"
+        assert block_starts[0]["index"] == 0
+        assert block_starts[1]["content_block"]["type"] == "tool_use"
+        assert block_starts[1]["index"] == 1
+        assert block_starts[1]["content_block"]["name"] == "get_weather"
+
+        for line in response.text.strip().splitlines():
+            if line.startswith("data:") and "message_delta" in line:
+                data = json.loads(line[len("data:") :].strip())
+                assert data["delta"]["stop_reason"] == "tool_use"
+                break
+
+    @pytest.mark.asyncio
+    async def test_streaming_multiple_tool_calls(self, app):
+        async def multi_tool_chunks():
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {"name": "get_weather", "arguments": '{"location": "SF"}'},
+                                },
+                            ]
+                        }
+                    }
+                ],
+            }
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 1,
+                                    "id": "call_2",
+                                    "type": "function",
+                                    "function": {"name": "get_time", "arguments": '{"tz": "PST"}'},
+                                },
+                            ]
+                        }
+                    }
+                ],
+            }
+
+        prepare_mock = AsyncMock(
+            return_value=PreparedStream(
+                model="test-model",
+                provider_name="fake(test-model)",
+                display_name="fake",
+                chunks=multi_tool_chunks(),
+                request_id="req-1",
+            )
+        )
+        with patch.object(Router, "prepare_stream", prepare_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 100,
+                        "messages": [{"role": "user", "content": "Info?"}],
+                        "stream": True,
+                    },
+                )
+        block_starts = []
+        for line in response.text.strip().splitlines():
+            if line.startswith("data:") and "content_block_start" in line:
+                data = json.loads(line[len("data:") :].strip())
+                if data.get("type") == "content_block_start":
+                    block_starts.append(data)
+
+        tool_starts = [b for b in block_starts if b["content_block"]["type"] == "tool_use"]
+        assert len(tool_starts) == 2
+        assert tool_starts[0]["content_block"]["name"] == "get_weather"
+        assert tool_starts[1]["content_block"]["name"] == "get_time"
+        assert tool_starts[0]["index"] == 0
+        assert tool_starts[1]["index"] == 1
+
+    @pytest.mark.asyncio
+    async def test_streaming_input_json_delta_accumulated(self, app):
+        async def incremental_chunks():
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {"name": "search", "arguments": ""},
+                                },
+                            ]
+                        }
+                    }
+                ],
+            }
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": '{"q'}},
+                            ]
+                        }
+                    }
+                ],
+            }
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": 'uery":'}},
+                            ]
+                        }
+                    }
+                ],
+            }
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": ' "test"}'}},
+                            ]
+                        }
+                    }
+                ],
+            }
+
+        prepare_mock = AsyncMock(
+            return_value=PreparedStream(
+                model="test-model",
+                provider_name="fake(test-model)",
+                display_name="fake",
+                chunks=incremental_chunks(),
+                request_id="req-1",
+            )
+        )
+        with patch.object(Router, "prepare_stream", prepare_mock):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                response = await ac.post(
+                    "/v1/messages",
+                    json={
+                        "model": "test-model",
+                        "max_tokens": 100,
+                        "messages": [{"role": "user", "content": "Search"}],
+                        "stream": True,
+                    },
+                )
+        json_parts = []
+        for line in response.text.strip().splitlines():
+            if line.startswith("data:") and "input_json_delta" in line:
+                data = json.loads(line[len("data:") :].strip())
+                json_parts.append(data["delta"]["partial_json"])
+        assert "".join(json_parts) == '{"query": "test"}'
+
+
+class TestRootEndpoint:
+    @pytest.mark.asyncio
+    async def test_head_returns_200(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.head("/")
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_get_root_returns_200(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.get("/")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+
+    @pytest.mark.asyncio
+    async def test_head_skips_auth(self, authed_app):
+        async with AsyncClient(transport=ASGITransport(app=authed_app), base_url="http://test") as ac:
+            response = await ac.head("/")
+        assert response.status_code == 200
 
 
 class TestProviderRegistry:

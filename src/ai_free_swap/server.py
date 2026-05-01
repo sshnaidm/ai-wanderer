@@ -43,7 +43,7 @@ def create_app(config: AppConfig) -> FastAPI:
 
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
-        if request.url.path == "/health":
+        if request.url.path in ("/", "/health"):
             return await call_next(request)
         if server_api_key:
             token = _extract_bearer_token(request.headers.get("authorization", ""))
@@ -246,9 +246,7 @@ def create_app(config: AppConfig) -> FastAPI:
                     "overloaded_error",
                 )
 
-            return EventSourceResponse(
-                _anthropic_stream_response(prepared_stream, show_provider)
-            )
+            return EventSourceResponse(_anthropic_stream_response(prepared_stream, show_provider))
 
         try:
             result = await router.route(
@@ -277,6 +275,7 @@ def create_app(config: AppConfig) -> FastAPI:
             result.content,
             result.model,
             msg_id,
+            message=result.message,
         )
         if show_provider:
             resp["provider_name"] = result.display_name
@@ -288,6 +287,10 @@ def create_app(config: AppConfig) -> FastAPI:
             "object": "list",
             "data": [{"id": model_name, "object": "model", "owned_by": "ai-free-swap"}],
         }
+
+    @app.api_route("/", methods=["GET", "HEAD"])
+    async def root():
+        return {"status": "ok"}
 
     @app.get("/health")
     async def health():
@@ -523,47 +526,149 @@ async def _anthropic_stream_response(
         "data": json.dumps({"type": "message_start", "message": message_obj}),
     }
 
-    yield {
-        "event": "content_block_start",
-        "data": json.dumps({
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {"type": "text", "text": ""},
-        }),
-    }
-
-    full_text: list[str] = []
+    next_block = 0
+    text_block_index: int | None = None
+    text_block_closed = False
+    tool_block_indices: dict[int, int] = {}
+    has_tool_calls = False
     stop_reason = "end_turn"
+
     try:
         async for chunk in prepared_stream.chunks:
-            text = _extract_stream_text(chunk)
-            if not text:
-                continue
-            full_text.append(text)
-            yield {
-                "event": "content_block_delta",
-                "data": json.dumps({
-                    "type": "content_block_delta",
-                    "index": 0,
-                    "delta": {"type": "text_delta", "text": text},
-                }),
-            }
+            text, tool_calls = _extract_stream_parts(chunk)
+
+            if text and not text_block_closed:
+                if text_block_index is None:
+                    text_block_index = next_block
+                    next_block += 1
+                    yield {
+                        "event": "content_block_start",
+                        "data": json.dumps(
+                            {
+                                "type": "content_block_start",
+                                "index": text_block_index,
+                                "content_block": {"type": "text", "text": ""},
+                            }
+                        ),
+                    }
+                yield {
+                    "event": "content_block_delta",
+                    "data": json.dumps(
+                        {
+                            "type": "content_block_delta",
+                            "index": text_block_index,
+                            "delta": {"type": "text_delta", "text": text},
+                        }
+                    ),
+                }
+
+            for tc in tool_calls:
+                if not isinstance(tc, dict):
+                    continue
+                tc_idx = tc.get("index", 0)
+
+                if tc_idx not in tool_block_indices:
+                    if text_block_index is not None and not text_block_closed:
+                        yield {
+                            "event": "content_block_stop",
+                            "data": json.dumps(
+                                {
+                                    "type": "content_block_stop",
+                                    "index": text_block_index,
+                                }
+                            ),
+                        }
+                        text_block_closed = True
+
+                    func = tc.get("function", {})
+                    tool_id = tc.get("id", f"toolu_{uuid.uuid4().hex[:24]}")
+                    block_idx = next_block
+                    next_block += 1
+                    tool_block_indices[tc_idx] = block_idx
+                    has_tool_calls = True
+
+                    yield {
+                        "event": "content_block_start",
+                        "data": json.dumps(
+                            {
+                                "type": "content_block_start",
+                                "index": block_idx,
+                                "content_block": {
+                                    "type": "tool_use",
+                                    "id": tool_id,
+                                    "name": func.get("name", ""),
+                                    "input": {},
+                                },
+                            }
+                        ),
+                    }
+
+                    args = func.get("arguments", "")
+                    if args:
+                        yield {
+                            "event": "content_block_delta",
+                            "data": json.dumps(
+                                {
+                                    "type": "content_block_delta",
+                                    "index": block_idx,
+                                    "delta": {
+                                        "type": "input_json_delta",
+                                        "partial_json": args,
+                                    },
+                                }
+                            ),
+                        }
+                else:
+                    block_idx = tool_block_indices[tc_idx]
+                    func = tc.get("function", {})
+                    args = func.get("arguments", "")
+                    if args:
+                        yield {
+                            "event": "content_block_delta",
+                            "data": json.dumps(
+                                {
+                                    "type": "content_block_delta",
+                                    "index": block_idx,
+                                    "delta": {
+                                        "type": "input_json_delta",
+                                        "partial_json": args,
+                                    },
+                                }
+                            ),
+                        }
     except StreamingProviderError as e:
         logger.error("[%s] %s", prepared_stream.request_id, e)
         stop_reason = "error"
 
-    yield {
-        "event": "content_block_stop",
-        "data": json.dumps({"type": "content_block_stop", "index": 0}),
-    }
+    if text_block_index is not None and not text_block_closed:
+        yield {
+            "event": "content_block_stop",
+            "data": json.dumps({"type": "content_block_stop", "index": text_block_index}),
+        }
+
+    for tc_idx in sorted(tool_block_indices):
+        yield {
+            "event": "content_block_stop",
+            "data": json.dumps(
+                {
+                    "type": "content_block_stop",
+                    "index": tool_block_indices[tc_idx],
+                }
+            ),
+        }
+
+    if has_tool_calls:
+        stop_reason = "tool_use"
 
     yield {
         "event": "message_delta",
-        "data": json.dumps({
-            "type": "message_delta",
-            "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-            "usage": {"output_tokens": 0},
-        }),
+        "data": json.dumps(
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                "usage": {"output_tokens": 0},
+            }
+        ),
     }
 
     yield {
@@ -595,3 +700,34 @@ def _extract_stream_text(chunk: str | dict[str, Any]) -> str:
             if output_item and output_text:
                 text_parts.append(output_text)
     return "".join(text_parts)
+
+
+def _extract_stream_parts(
+    chunk: str | dict[str, Any],
+) -> tuple[str, list[dict[str, Any]]]:
+    if isinstance(chunk, str):
+        return chunk, []
+    if not isinstance(chunk, dict):
+        return "", []
+    choices = chunk.get("choices")
+    if not isinstance(choices, list):
+        return "", []
+    text_parts: list[str] = []
+    tool_calls: list[dict[str, Any]] = []
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        delta = choice.get("delta")
+        if not isinstance(delta, dict):
+            continue
+        content = delta.get("content")
+        if isinstance(content, str):
+            text_parts.append(content)
+        elif isinstance(content, list):
+            _, output_text = message_to_response_output({"role": delta.get("role", "assistant"), "content": content})
+            if output_text:
+                text_parts.append(output_text)
+        tc = delta.get("tool_calls")
+        if isinstance(tc, list):
+            tool_calls.extend(tc)
+    return "".join(text_parts), tool_calls

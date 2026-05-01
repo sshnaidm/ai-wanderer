@@ -40,7 +40,9 @@ Standard OpenAI chat completions endpoint.
 The `model` field can be:
 - `"aifree"` (or whatever you set `model_name` to) -- uses any available provider.
 - A specific backend model name (e.g., `"gemini-2.5-flash"`) -- only uses
-  providers configured with that model.
+  providers configured with that model (when `model_routing: "match"`).
+- Any arbitrary name -- with the default `model_routing: "any"`, the model name
+  is ignored and all providers are used in priority order.
 
 **Supported parameters:** `temperature`, `top_p`, `n`, `stop`, `max_tokens`,
 `presence_penalty`, `frequency_penalty`, `tools`, `tool_choice`,

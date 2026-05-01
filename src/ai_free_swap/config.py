@@ -85,14 +85,26 @@ class ServerConfig(BaseModel):
         return value.strip()
 
 
+_VALID_MODEL_ROUTING = frozenset({"any", "match"})
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     keep_cycles: int = Field(default=1, ge=1)
     model_name: str = Field(default="aifree")
     show_provider: bool = Field(default=True)
+    model_routing: str = Field(default="any")
     server: ServerConfig = Field(default_factory=ServerConfig)
     providers: list[PriorityGroup] = Field(min_length=1)
+
+    @field_validator("model_routing")
+    @classmethod
+    def _validate_model_routing(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in _VALID_MODEL_ROUTING:
+            raise ValueError(f"model_routing must be one of {sorted(_VALID_MODEL_ROUTING)}, got {value!r}")
+        return value
 
 
 _ENV_VAR_RE = re.compile(r"\$\{([^}]+)\}")

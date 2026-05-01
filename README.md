@@ -204,6 +204,7 @@ cp config.yaml.example config.yaml
 | `keep_cycles` | `1` | How many times to cycle through all providers before giving up. Set to `2` or `3` if providers have intermittent failures. |
 | `model_name` | `"aifree"` | The model name shown in `/v1/models`. Clients can use this name or any backend model name directly. |
 | `show_provider` | `true` | When `true`, responses include a `provider_name` field showing which provider handled the request. Set to `false` to hide this. |
+| `model_routing` | `"any"` | How to handle the model name from client requests. `"any"` (default) ignores the client model and uses all providers in priority order -- best for proxy use cases where clients send arbitrary model names. `"match"` routes to backends whose configured model matches the request, falling back to all providers if no match is found -- useful when you configure multiple distinct models and want clients to choose. |
 
 ### Server Settings
 
@@ -365,6 +366,7 @@ providers:
 keep_cycles: 1
 model_name: "aifree"
 show_provider: true
+model_routing: "any"  # "any" = ignore client model, "match" = route by model name
 
 server:
   host: "0.0.0.0"
