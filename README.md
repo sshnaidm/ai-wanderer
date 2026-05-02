@@ -1,14 +1,15 @@
 # ai-free-swap
 
-An OpenAI-compatible proxy server that routes your requests through multiple
-free-tier AI providers. If one provider is down or rate-limited, the proxy
-automatically tries the next one -- so your application keeps working without
-any code changes.
+An OpenAI- and Anthropic-compatible proxy server that routes your requests
+through multiple free-tier AI providers. If one provider is down or rate-limited,
+the proxy automatically tries the next one -- so your application keeps working
+without any code changes.
 
 You configure a list of AI providers (Google Gemini, Qwen, OpenRouter, xAI Grok,
 Anthropic, or any OpenAI-compatible service), assign priorities, and the proxy
 handles the rest. Your app talks to one local endpoint, and ai-free-swap finds a
-working provider behind the scenes.
+working provider behind the scenes. Both OpenAI SDK and Anthropic SDK clients
+work out of the box.
 
 ## One-Click Deploy
 
@@ -54,6 +55,7 @@ Oracle Cloud free tier).
 Your App                ai-free-swap                   Providers
   |                         |                              |
   |-- POST /v1/chat/... -->|                              |
+  |-- POST /v1/messages -->|                              |
   |                         |-- try Gemini (priority 1) ->|
   |                         |<-- error / rate limited -----|
   |                         |                              |
@@ -63,12 +65,13 @@ Your App                ai-free-swap                   Providers
   |<-- response -----------|                              |
 ```
 
-1. Your application sends a standard OpenAI-format request to the proxy.
+1. Your application sends a request to the proxy -- either OpenAI format
+   (`/v1/chat/completions`) or Anthropic format (`/v1/messages`).
 2. The proxy tries providers in priority order (lowest number = highest priority).
 3. Within the same priority level, providers are tried in random order.
 4. If a provider fails, the proxy automatically tries the next one.
-5. The response is returned in standard OpenAI format -- your app doesn't need
-   to know which provider actually handled the request.
+5. The response is returned in the same format the client used -- your app
+   doesn't need to know which provider actually handled the request.
 
 ---
 
@@ -201,6 +204,7 @@ cp config.yaml.example config.yaml
 | `keep_cycles` | `1` | How many times to cycle through all providers before giving up. Set to `2` or `3` if providers have intermittent failures. |
 | `model_name` | `"aifree"` | The model name shown in `/v1/models`. Clients can use this name or any backend model name directly. |
 | `show_provider` | `true` | When `true`, responses include a `provider_name` field showing which provider handled the request. Set to `false` to hide this. |
+| `model_routing` | `"any"` | How to handle the model name from client requests. `"any"` (default) ignores the client model and uses all providers in priority order -- best for proxy use cases where clients send arbitrary model names. `"match"` routes to backends whose configured model matches the request, falling back to all providers if no match is found -- useful when you configure multiple distinct models and want clients to choose. |
 
 ### Server Settings
 
@@ -362,6 +366,7 @@ providers:
 keep_cycles: 1
 model_name: "aifree"
 show_provider: true
+model_routing: "any"  # "any" = ignore client model, "match" = route by model name
 
 server:
   host: "0.0.0.0"
@@ -461,20 +466,71 @@ for chunk in stream:
         print(chunk.choices[0].delta.content, end="")
 ```
 
+### Anthropic Python SDK
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic(
+    base_url="http://localhost:8000",
+    api_key="unused",  # or your proxy api_key if set
+)
+
+response = client.messages.create(
+    model="aifree",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(response.content[0].text)
+```
+
+**With streaming:**
+
+```python
+with client.messages.stream(
+    model="aifree",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Tell me a story."}],
+) as stream:
+    for text in stream.text_stream:
+        print(text, end="")
+```
+
+**Using `ANTHROPIC_BASE_URL` environment variable:**
+
+Many tools that use the Anthropic SDK (Claude Code, aider, etc.) read the
+`ANTHROPIC_BASE_URL` environment variable. Set it to point at your proxy:
+
+```bash
+export ANTHROPIC_BASE_URL="http://localhost:8000"
+export ANTHROPIC_API_KEY="your-proxy-key"  # or any non-empty string if proxy has no api_key
+
+# Now any tool using the Anthropic SDK will go through your proxy
+claude   # Claude Code
+aider    # aider with --model claude-sonnet-4-6
+```
+
 ### curl
 
 ```bash
-# Non-streaming
+# Non-streaming (OpenAI format)
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "aifree", "messages": [{"role": "user", "content": "Hi"}]}'
 
-# Streaming
+# Streaming (OpenAI format)
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "aifree", "messages": [{"role": "user", "content": "Hi"}], "stream": true}'
 
-# With proxy authentication
+# Non-streaming (Anthropic format)
+curl http://localhost:8000/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: your-proxy-key" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{"model": "aifree", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hi"}]}'
+
+# With proxy authentication (OpenAI style)
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-proxy-key" \
@@ -492,6 +548,17 @@ you just need to change two settings:
 This works with tools like aider, cline, open-hands, continue, LangChain,
 LlamaIndex, Open Interpreter, and any other application that supports custom
 OpenAI endpoints.
+
+### Any Anthropic-Compatible Client
+
+ai-free-swap also works as a drop-in replacement for the Anthropic Messages
+API. Set the base URL to your proxy:
+
+- **`ANTHROPIC_BASE_URL`:** `http://localhost:8000`
+- **`ANTHROPIC_API_KEY`:** your proxy `api_key` (or any non-empty string)
+
+This works with Claude Code, aider (Anthropic mode), and any other tool that
+uses the Anthropic SDK with a configurable base URL.
 
 ---
 
@@ -532,13 +599,21 @@ server:
   api_key: "your-secret-proxy-key"
 ```
 
-Clients must then include this key in requests:
+Clients must then include this key in requests. Both authentication methods
+are supported:
 
 ```bash
+# OpenAI-style: Authorization header
 curl http://your-server:8000/v1/chat/completions \
   -H "Authorization: Bearer your-secret-proxy-key" \
   -H "Content-Type: application/json" \
   -d '{"model": "aifree", "messages": [{"role": "user", "content": "Hi"}]}'
+
+# Anthropic-style: x-api-key header
+curl http://your-server:8000/v1/messages \
+  -H "x-api-key: your-secret-proxy-key" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "aifree", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hi"}]}'
 ```
 
 The `/health` endpoint is always public (no key required).

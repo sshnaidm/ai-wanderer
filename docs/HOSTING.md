@@ -2,9 +2,12 @@
 
 You can host ai-free-swap on a public server so it's accessible from anywhere.
 No fork needed -- these platforms deploy directly from the upstream repository.
+Both OpenAI and Anthropic SDK clients can connect to the same proxy instance.
 
 A `SERVER_API_KEY` is always required for cloud deployments to prevent
 unauthorized access to your proxy (and your provider API keys behind it).
+Clients can authenticate using either `Authorization: Bearer <key>` (OpenAI
+style) or `x-api-key: <key>` (Anthropic style).
 
 ---
 
@@ -183,6 +186,23 @@ EXPOSE 8000
 ENTRYPOINT ["ai-free-swap"]
 CMD ["--config", "/app/config.yaml"]
 ```
+
+---
+
+## Using with Anthropic SDK Clients
+
+Once your proxy is deployed, any tool using the Anthropic SDK can connect by
+setting two environment variables:
+
+```bash
+export ANTHROPIC_BASE_URL="https://your-service.onrender.com"
+export ANTHROPIC_API_KEY="your-SERVER_API_KEY"
+```
+
+This works with Claude Code, aider (Anthropic mode), and any other tool that
+reads `ANTHROPIC_BASE_URL`. The proxy accepts both OpenAI-format requests
+(`/v1/chat/completions`) and Anthropic-format requests (`/v1/messages`) on the
+same instance.
 
 ---
 

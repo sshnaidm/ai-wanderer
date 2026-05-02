@@ -6,7 +6,6 @@ import pytest
 
 from ai_free_swap.router import (
     AllProvidersFailedError,
-    NoMatchingProvidersError,
     Router,
     StreamingProviderError,
 )
@@ -84,7 +83,8 @@ class TestRouterRoute:
                         {"model": "model-a", "response": "from a"},
                         {"model": "model-b", "response": "from b"},
                     ]
-                ]
+                ],
+                model_routing="match",
             )
         )
         result = await router.route(messages, requested_model="model-b")
@@ -134,10 +134,60 @@ class TestRouterRoute:
         assert len(exc_info.value.errors) == 2
 
     @pytest.mark.asyncio
-    async def test_unknown_model_raises(self, messages):
-        router = Router(make_config([[{"model": "configured-model"}]]))
-        with pytest.raises(NoMatchingProvidersError, match="configured"):
-            await router.route(messages, requested_model="missing-model")
+    async def test_any_routing_ignores_client_model(self, messages):
+        router = Router(
+            make_config(
+                [[{"model": "configured-model", "response": "fallback ok"}]],
+                model_routing="any",
+            )
+        )
+        result = await router.route(messages, requested_model="missing-model")
+        assert result.content == "fallback ok"
+        assert result.model == "configured-model"
+
+    @pytest.mark.asyncio
+    async def test_match_routing_uses_matching_backend(self, messages):
+        router = Router(
+            make_config(
+                [
+                    [
+                        {"model": "model-a", "response": "from a"},
+                        {"model": "model-b", "response": "from b"},
+                    ]
+                ],
+                model_routing="match",
+            )
+        )
+        result = await router.route(messages, requested_model="model-b")
+        assert result.content == "from b"
+        assert result.model == "model-b"
+
+    @pytest.mark.asyncio
+    async def test_match_routing_falls_back_when_no_match(self, messages):
+        router = Router(
+            make_config(
+                [[{"model": "configured-model", "response": "fallback ok"}]],
+                model_routing="match",
+            )
+        )
+        result = await router.route(messages, requested_model="missing-model")
+        assert result.content == "fallback ok"
+        assert result.model == "configured-model"
+
+    @pytest.mark.asyncio
+    async def test_any_routing_ignores_matching_model_priority(self, messages):
+        router = Router(
+            make_config(
+                [
+                    [{"model": "low-pri", "response": "from priority 1"}],
+                    [{"model": "target", "response": "from priority 2"}],
+                ],
+                model_routing="any",
+            )
+        )
+        with patch("ai_free_swap.router.random.sample", side_effect=lambda group, _: group):
+            result = await router.route(messages, requested_model="target")
+        assert result.content == "from priority 1"
 
 
 class TestRouterStream:

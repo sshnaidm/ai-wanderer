@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from collections.abc import Mapping
@@ -260,4 +261,242 @@ def make_stream_chunk(
         "created": int(time.time()),
         "model": model,
         "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Anthropic Messages API models
+# ---------------------------------------------------------------------------
+
+
+class AnthropicMessagesRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    model: str = "aifree"
+    messages: list[ChatMessage] = Field(default_factory=list)
+    max_tokens: int = 4096
+    system: Any = None
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    stop_sequences: list[str] | None = None
+    stream: bool = False
+    metadata: dict[str, Any] | None = None
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: Any = None
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def _validate_model(cls, value: Any) -> str:
+        if value is None:
+            return "aifree"
+        return _normalize_model_name(str(value))
+
+    def to_messages(self) -> list[dict[str, Any]]:
+        msgs: list[dict[str, Any]] = []
+        if self.system:
+            if isinstance(self.system, str):
+                msgs.append({"role": "system", "content": self.system})
+            elif isinstance(self.system, list):
+                text_parts = []
+                for block in self.system:
+                    if isinstance(block, str):
+                        text_parts.append(block)
+                    elif isinstance(block, dict) and block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                if text_parts:
+                    msgs.append({"role": "system", "content": "\n\n".join(text_parts)})
+        for message in self.messages:
+            raw = message.model_dump(exclude_none=True)
+            converted = _convert_anthropic_message(raw)
+            if isinstance(converted, list):
+                msgs.extend(converted)
+            else:
+                msgs.append(converted)
+        return msgs
+
+    def to_model_kwargs(self) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {}
+        kwargs["max_tokens"] = self.max_tokens
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
+        if self.top_p is not None:
+            kwargs["top_p"] = self.top_p
+        if self.top_k is not None:
+            kwargs["top_k"] = self.top_k
+        if self.stop_sequences is not None:
+            kwargs["stop"] = self.stop_sequences
+        if self.tools is not None:
+            kwargs["tools"] = [_convert_anthropic_tool(t) for t in self.tools]
+        if self.tool_choice is not None:
+            kwargs["tool_choice"] = _convert_anthropic_tool_choice(self.tool_choice)
+        return kwargs
+
+
+def _convert_anthropic_tool(tool: dict[str, Any]) -> dict[str, Any]:
+    func: dict[str, Any] = {"name": tool.get("name", "")}
+    if "description" in tool:
+        func["description"] = tool["description"]
+    if "input_schema" in tool:
+        func["parameters"] = tool["input_schema"]
+    return {"type": "function", "function": func}
+
+
+def _convert_anthropic_tool_choice(choice: Any) -> Any:
+    if isinstance(choice, str):
+        if choice == "any":
+            return "required"
+        return choice
+    if isinstance(choice, dict) and choice.get("type") == "tool":
+        return {
+            "type": "function",
+            "function": {"name": choice.get("name", "")},
+        }
+    return choice
+
+
+def _convert_anthropic_message(
+    msg: dict[str, Any],
+) -> dict[str, Any] | list[dict[str, Any]]:
+    content = msg.get("content")
+    if not isinstance(content, list):
+        return msg
+
+    has_tool_result = any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+    has_tool_use = any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content)
+
+    if msg.get("role") == "assistant" and has_tool_use:
+        return _convert_assistant_tool_use(msg, content)
+
+    if has_tool_result:
+        return _convert_tool_results(content)
+
+    return msg
+
+
+def _convert_assistant_tool_use(
+    msg: dict[str, Any],
+    content: list,
+) -> dict[str, Any]:
+    text_parts: list[str] = []
+    tool_calls: list[dict[str, Any]] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            text_parts.append(block.get("text", ""))
+        elif block.get("type") == "tool_use":
+            inp = block.get("input", {})
+            tool_calls.append(
+                {
+                    "id": block.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name", ""),
+                        "arguments": json.dumps(inp) if not isinstance(inp, str) else inp,
+                    },
+                }
+            )
+    result: dict[str, Any] = {"role": "assistant"}
+    joined = "".join(text_parts)
+    if joined:
+        result["content"] = joined
+    else:
+        result["content"] = None
+    if tool_calls:
+        result["tool_calls"] = tool_calls
+    return result
+
+
+def _convert_tool_results(content: list) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    text_parts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "tool_result":
+            tool_content = block.get("content", "")
+            if isinstance(tool_content, list):
+                parts = []
+                for item in tool_content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        parts.append(item.get("text", ""))
+                    elif isinstance(item, str):
+                        parts.append(item)
+                tool_content = "".join(parts)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": block.get("tool_use_id", ""),
+                    "content": str(tool_content) if tool_content else "",
+                }
+            )
+        elif block.get("type") == "text":
+            text_parts.append(block.get("text", ""))
+    if text_parts:
+        messages.append({"role": "user", "content": "".join(text_parts)})
+    return messages
+
+
+def make_anthropic_response(
+    content: Any,
+    model: str,
+    msg_id: str,
+    *,
+    message: Mapping[str, Any] | None = None,
+    stop_reason: str = "end_turn",
+) -> dict[str, Any]:
+    content_blocks: list[dict[str, Any]] = []
+    if message and message.get("tool_calls"):
+        text = message.get("content")
+        if isinstance(text, str) and text:
+            content_blocks.append({"type": "text", "text": text})
+        for tc in message["tool_calls"]:
+            func = tc.get("function", {})
+            args = func.get("arguments", "{}")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except (json.JSONDecodeError, TypeError):
+                    args = {"raw": args}
+            content_blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": tc.get("id", ""),
+                    "name": func.get("name", ""),
+                    "input": args,
+                }
+            )
+        stop_reason = "tool_use"
+    elif isinstance(content, str):
+        content_blocks = [{"type": "text", "text": content}]
+    elif isinstance(content, list):
+        content_blocks = content
+    else:
+        content_blocks = [{"type": "text", "text": str(content) if content else ""}]
+    return {
+        "id": msg_id,
+        "type": "message",
+        "role": "assistant",
+        "content": content_blocks,
+        "model": model,
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+        },
+    }
+
+
+def make_anthropic_error_response(
+    message: str,
+    error_type: str,
+) -> dict[str, Any]:
+    return {
+        "type": "error",
+        "error": {
+            "type": error_type,
+            "message": message,
+        },
     }

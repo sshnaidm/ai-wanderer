@@ -70,6 +70,7 @@ class Router:
     def __init__(self, config: AppConfig):
         self.keep_cycles = config.keep_cycles
         self.model_name = config.model_name
+        self.model_routing = config.model_routing
 
         priority_map: dict[int, list[BaseProvider]] = defaultdict(list)
         for group in sorted(config.providers, key=lambda g: g.priority):
@@ -227,6 +228,9 @@ class Router:
         requested_model: str | None,
         request_id: str,
     ) -> list[list[BaseProvider]]:
+        if self.model_routing == "any":
+            return self.priority_groups
+
         normalized_model = self._normalize_requested_model(requested_model)
         if normalized_model is None:
             return self.priority_groups
@@ -234,14 +238,12 @@ class Router:
         filtered_groups = [[p for p in group if p.config.model == normalized_model] for group in self.priority_groups]
         filtered_groups = [g for g in filtered_groups if g]
         if not filtered_groups:
-            available = [p.config.model for g in self.priority_groups for p in g]
             logger.debug(
-                "[%s] Model %r not found, available models: %s",
+                "[%s] Model %r not found in backends, falling back to all providers",
                 request_id,
                 normalized_model,
-                available,
             )
-            raise NoMatchingProvidersError(normalized_model)
+            return self.priority_groups
         return filtered_groups
 
     def _normalize_requested_model(self, requested_model: str | None) -> str | None:
