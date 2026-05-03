@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import random
+import time
 import uuid
 from collections import defaultdict
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator
@@ -46,6 +47,7 @@ class RoutedResponse:
     display_name: str = ""
     message: dict[str, Any] | None = None
     raw_response: dict[str, Any] | None = None
+    usage: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -127,16 +129,33 @@ class Router:
             label = self._label(backend)
             try:
                 logger.debug("[%s] Trying sending request to %s", request_id, label)
+                t0 = time.monotonic()
                 result = await backend.complete(messages, **kwargs)
+                elapsed = time.monotonic() - t0
                 if isinstance(result, ProviderResponse):
                     content = result.text
                     message = result.message
                     raw_response = result.raw_response
+                    usage = result.usage
                 else:
                     content = result
                     message = None
                     raw_response = None
-                logger.debug("[%s] Success processing with %s", request_id, label)
+                    usage = None
+                usage_str = ""
+                if usage:
+                    usage_str = " tokens=%s/%s/%s" % (
+                        usage.get("prompt_tokens", 0),
+                        usage.get("completion_tokens", 0),
+                        usage.get("total_tokens", 0),
+                    )
+                logger.info(
+                    "[%s] Completed with %s in %.2fs%s",
+                    request_id,
+                    label,
+                    elapsed,
+                    usage_str,
+                )
                 return RoutedResponse(
                     content=content,
                     model=backend.config.model,
@@ -144,6 +163,7 @@ class Router:
                     display_name=backend.config.name or backend.config.provider,
                     message=message,
                     raw_response=raw_response,
+                    usage=usage,
                 )
             except Exception as e:
                 logger.debug(
@@ -172,6 +192,7 @@ class Router:
             label = self._label(backend)
             try:
                 logger.debug("[%s] Trying sending request to %s (stream)", request_id, label)
+                t0 = time.monotonic()
                 stream = aiter(backend.stream(messages, **kwargs))
                 buffered: list[str] = []
                 while True:
@@ -183,13 +204,19 @@ class Router:
                         buffered.append(chunk)
                         break
 
-                logger.debug("[%s] Success processing with %s (stream)", request_id, label)
+                ttfb = time.monotonic() - t0
+                logger.info(
+                    "[%s] Stream started from %s (ttfb=%.2fs)",
+                    request_id,
+                    label,
+                    ttfb,
+                )
                 raw_chunks = bool(buffered and isinstance(buffered[0], dict))
                 return PreparedStream(
                     model=backend.config.model,
                     provider_name=backend.name,
                     display_name=backend.config.name or backend.config.provider,
-                    chunks=self._drain_stream(stream, buffered, backend, request_id),
+                    chunks=self._drain_stream(stream, buffered, backend, request_id, t0),
                     request_id=request_id,
                     raw_chunks=raw_chunks,
                 )
@@ -260,16 +287,23 @@ class Router:
         buffered: list[str | dict[str, Any]],
         backend: BaseProvider,
         request_id: str,
+        t0: float = 0,
     ) -> AsyncGenerator[str | dict[str, Any], None]:
+        label = self._label(backend)
+        usage: dict[str, int] | None = None
+
         for text in buffered:
+            if isinstance(text, dict) and text.get("usage"):
+                usage = text["usage"]
             yield text
 
         try:
             async for chunk in stream:
                 if chunk:
+                    if isinstance(chunk, dict) and chunk.get("usage"):
+                        usage = chunk["usage"]
                     yield chunk
         except Exception as e:
-            label = self._label(backend)
             logger.error(
                 "[%s] Streaming interrupted from %s: %s",
                 request_id,
@@ -277,3 +311,22 @@ class Router:
                 e,
             )
             raise StreamingProviderError(backend.name) from e
+        finally:
+            elapsed = time.monotonic() - t0 if t0 else 0
+            usage_str = ""
+            if usage:
+                usage_str = " tokens=%s/%s/%s" % (
+                    usage.get("prompt_tokens", usage.get("input_tokens", 0)),
+                    usage.get("completion_tokens", usage.get("output_tokens", 0)),
+                    usage.get("total_tokens",
+                              usage.get("prompt_tokens", usage.get("input_tokens", 0))
+                              + usage.get("completion_tokens", usage.get("output_tokens", 0))),
+                )
+            if elapsed:
+                logger.info(
+                    "[%s] Stream finished from %s in %.2fs%s",
+                    request_id,
+                    label,
+                    elapsed,
+                    usage_str,
+                )
