@@ -23,6 +23,7 @@ class ProviderResponse:
     text: str = ""
     message: dict[str, Any] | None = None
     raw_response: dict[str, Any] | None = None
+    usage: dict[str, int] | None = None
 
 
 class BaseProvider(ABC):

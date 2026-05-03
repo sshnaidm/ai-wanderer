@@ -112,10 +112,12 @@ class OpenAICompatProvider(BaseProvider):
         choices = raw.get("choices") or []
         first_choice = choices[0] if choices else {}
         message = first_choice.get("message") if isinstance(first_choice, dict) else None
+        usage = raw.get("usage")
         return ProviderResponse(
             text=self._extract_text(message),
             message=message,
             raw_response=raw,
+            usage=usage,
         )
 
     async def stream(

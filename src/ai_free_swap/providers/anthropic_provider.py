@@ -145,9 +145,17 @@ class AnthropicProvider(BaseProvider):
             **filtered,
         )
         text = _extract_text(resp)
+        usage = None
+        if resp.usage:
+            usage = {
+                "prompt_tokens": resp.usage.input_tokens,
+                "completion_tokens": resp.usage.output_tokens,
+                "total_tokens": resp.usage.input_tokens + resp.usage.output_tokens,
+            }
         return ProviderResponse(
             text=text,
             message={"role": "assistant", "content": text},
+            usage=usage,
         )
 
     async def stream(self, messages: list[dict], **kwargs) -> AsyncGenerator[str, None]:
