@@ -190,6 +190,75 @@ class TestRouterRoute:
         assert result.content == "from priority 1"
 
 
+class TestRouterRateLimiting:
+    @pytest.mark.asyncio
+    async def test_rate_limited_backend_skipped(self, messages):
+        router = Router(
+            make_config(
+                [
+                    [
+                        {
+                            "response": "from limited",
+                            "limits": {"rpd": 1},
+                        }
+                    ],
+                    [{"response": "from fallback"}],
+                ]
+            )
+        )
+        with patch("ai_free_swap.router.random.sample", side_effect=lambda group, _: group):
+            result1 = await router.route(messages)
+            assert result1.content == "from limited"
+
+            result2 = await router.route(messages)
+            assert result2.content == "from fallback"
+
+    @pytest.mark.asyncio
+    async def test_all_rate_limited_raises(self, messages):
+        router = Router(
+            make_config(
+                [
+                    [{"response": "a", "limits": {"rpd": 1}}],
+                    [{"response": "b", "limits": {"rpd": 1}}],
+                ]
+            )
+        )
+        await router.route(messages)
+        await router.route(messages)
+        with pytest.raises(AllProvidersFailedError):
+            await router.route(messages)
+
+    @pytest.mark.asyncio
+    async def test_no_limits_never_blocked(self, messages):
+        router = Router(make_config([[{"response": "ok"}]]))
+        for _ in range(50):
+            result = await router.route(messages)
+            assert result.content == "ok"
+
+    @pytest.mark.asyncio
+    async def test_stream_records_request(self, messages):
+        router = Router(
+            make_config(
+                [
+                    [
+                        {
+                            "response": "streamed",
+                            "limits": {"rpd": 1},
+                        }
+                    ],
+                    [{"response": "fallback stream"}],
+                ]
+            )
+        )
+        prepared = await router.prepare_stream(messages)
+        chunks = [chunk async for chunk in prepared.chunks]
+        assert "".join(chunks).strip() == "streamed"
+
+        prepared2 = await router.prepare_stream(messages)
+        chunks2 = [chunk async for chunk in prepared2.chunks]
+        assert "".join(chunks2).strip() == "fallback stream"
+
+
 class TestRouterStream:
     @pytest.mark.asyncio
     async def test_prepare_stream_fails_over_before_first_chunk(self, messages):

@@ -22,6 +22,12 @@ providers:
         name: "gemini-flash-1"
         api_key: "${GEMINI_API_KEY_1}"
         model: "gemini-2.5-flash"
+        # limits:          # Optional: rate limits to stay within free tier
+        #   rpm: 15        # requests per minute
+        #   rph: 500       # requests per hour
+        #   rpd: 1500      # requests per day
+        #   tpm: 1000000   # tokens per minute
+        #   tpd: 50000000  # tokens per day
       - provider: gemini
         name: "gemini-flash-2"
         api_key: "${GEMINI_API_KEY_2}"

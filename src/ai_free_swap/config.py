@@ -21,6 +21,24 @@ _RESTRICTED_EXTRA_KEYS = frozenset(
 )
 
 
+class RateLimits(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rpm: int | None = None
+    rph: int | None = None
+    rpd: int | None = None
+    tpm: int | None = None
+    tph: int | None = None
+    tpd: int | None = None
+
+    @field_validator("rpm", "rph", "rpd", "tpm", "tph", "tpd")
+    @classmethod
+    def _validate_positive(cls, value: int | None) -> int | None:
+        if value is not None and value < 1:
+            raise ValueError("limit must be >= 1")
+        return value
+
+
 class BackendConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -29,6 +47,7 @@ class BackendConfig(BaseModel):
     model: str
     name: str | None = None
     base_url: str | None = None
+    limits: RateLimits | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("provider", "api_key", "model")

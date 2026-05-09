@@ -9,8 +9,9 @@ from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from typing import Any
 from dataclasses import dataclass
 
-from .config import AppConfig
+from .config import AppConfig, RateLimits
 from .providers.base import PROVIDER_REGISTRY, BaseProvider, ProviderResponse
+from .rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,8 @@ class Router:
         self.keep_cycles = config.keep_cycles
         self.model_name = config.model_name
         self.model_routing = config.model_routing
+        self._rate_limiter = RateLimiter()
+        self._backend_limits: dict[int, RateLimits] = {}
 
         priority_map: dict[int, list[BaseProvider]] = defaultdict(list)
         for group in sorted(config.providers, key=lambda g: g.priority):
@@ -87,7 +90,10 @@ class Router:
                             f"Either use a known provider ({', '.join(sorted(PROVIDER_REGISTRY))}) "
                             f"or set base_url for an OpenAI-compatible endpoint."
                         )
-                priority_map[group.priority].append(cls(backend))
+                instance = cls(backend)
+                priority_map[group.priority].append(instance)
+                if backend.limits:
+                    self._backend_limits[id(instance)] = backend.limits
 
         self.priority_groups = [priority_map[priority] for priority in sorted(priority_map)]
 
@@ -156,6 +162,13 @@ class Router:
                     elapsed,
                     usage_str,
                 )
+                limits = self._backend_limits.get(id(backend))
+                if limits:
+                    self._rate_limiter.record_request(id(backend))
+                    if usage:
+                        total = usage.get("total_tokens", 0)
+                        if total:
+                            self._rate_limiter.record_tokens(id(backend), total)
                 return RoutedResponse(
                     content=content,
                     model=backend.config.model,
@@ -211,6 +224,9 @@ class Router:
                     label,
                     ttfb,
                 )
+                limits = self._backend_limits.get(id(backend))
+                if limits:
+                    self._rate_limiter.record_request(id(backend))
                 raw_chunks = bool(buffered and isinstance(buffered[0], dict))
                 return PreparedStream(
                     model=backend.config.model,
@@ -248,7 +264,18 @@ class Router:
                 )
 
             for group in candidate_groups:
-                yield from random.sample(group, len(group))
+                available = []
+                for backend in group:
+                    limits = self._backend_limits.get(id(backend))
+                    if limits and not self._rate_limiter.is_allowed(id(backend), limits):
+                        logger.debug(
+                            "[%s] Skipping %s (rate limited)",
+                            request_id,
+                            self._label(backend),
+                        )
+                        continue
+                    available.append(backend)
+                yield from random.sample(available, len(available))
 
     def _get_candidate_groups(
         self,
@@ -318,9 +345,11 @@ class Router:
                 usage_str = " tokens=%s/%s/%s" % (
                     usage.get("prompt_tokens", usage.get("input_tokens", 0)),
                     usage.get("completion_tokens", usage.get("output_tokens", 0)),
-                    usage.get("total_tokens",
-                              usage.get("prompt_tokens", usage.get("input_tokens", 0))
-                              + usage.get("completion_tokens", usage.get("output_tokens", 0))),
+                    usage.get(
+                        "total_tokens",
+                        usage.get("prompt_tokens", usage.get("input_tokens", 0))
+                        + usage.get("completion_tokens", usage.get("output_tokens", 0)),
+                    ),
                 )
             if elapsed:
                 logger.info(
@@ -330,3 +359,13 @@ class Router:
                     elapsed,
                     usage_str,
                 )
+            if usage:
+                limits = self._backend_limits.get(id(backend))
+                if limits:
+                    total = usage.get(
+                        "total_tokens",
+                        usage.get("prompt_tokens", usage.get("input_tokens", 0))
+                        + usage.get("completion_tokens", usage.get("output_tokens", 0)),
+                    )
+                    if total:
+                        self._rate_limiter.record_tokens(id(backend), total)
