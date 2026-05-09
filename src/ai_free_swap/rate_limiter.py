@@ -121,6 +121,10 @@ class RateLimiter:
     def mark_dirty(self) -> None:
         self._dirty = True
 
+    def counters_snapshot(self) -> dict[str, dict[str, dict[str, int]]]:
+        self._cleanup()
+        return self._to_json_data()
+
     def _tick_cleanup(self) -> None:
         self._ops += 1
         if self._ops % _CLEANUP_INTERVAL == 0:
