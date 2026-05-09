@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -19,11 +20,14 @@ class FakeProvider(BaseProvider):
         self.fail_error = config.extra.get("fail_error")
         self.stream_chunks = config.extra.get("stream_chunks")
         self.stream_fail_after_chunks = config.extra.get("stream_fail_after_chunks")
+        self.delay = config.extra.get("delay", 0)
         self.invoke_calls: list[dict[str, Any]] = []
         self.stream_calls: list[dict[str, Any]] = []
 
     async def complete(self, messages: list[dict], **kwargs) -> str:
         self.invoke_calls.append({"messages": messages, "kwargs": kwargs})
+        if self.delay:
+            await asyncio.sleep(self.delay)
         if self.should_fail:
             raise self.fail_error or RuntimeError(f"{self.name} forced failure")
         return self.response
@@ -65,6 +69,7 @@ def make_config(
                 "fail_error",
                 "stream_chunks",
                 "stream_fail_after_chunks",
+                "delay",
             ):
                 if key in backend_data:
                     extra[key] = backend_data[key]

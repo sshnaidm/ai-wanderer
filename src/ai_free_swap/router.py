@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import logging
 import random
 import time
 import uuid
 from collections import defaultdict
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator
-from typing import Any
 from dataclasses import dataclass
+from typing import Any
 
 from .config import AppConfig, RateLimits
 from .providers.base import PROVIDER_REGISTRY, BaseProvider, ProviderResponse
@@ -70,12 +73,10 @@ def _format_error(e: Exception) -> str:
 
 
 class Router:
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, *, state_file: str | None = None):
         self.keep_cycles = config.keep_cycles
         self.model_name = config.model_name
         self.model_routing = config.model_routing
-        self._rate_limiter = RateLimiter()
-        self._backend_limits: dict[int, RateLimits] = {}
 
         priority_map: dict[int, list[BaseProvider]] = defaultdict(list)
         for group in sorted(config.providers, key=lambda g: g.priority):
@@ -90,15 +91,15 @@ class Router:
                             f"Either use a known provider ({', '.join(sorted(PROVIDER_REGISTRY))}) "
                             f"or set base_url for an OpenAI-compatible endpoint."
                         )
-                instance = cls(backend)
-                priority_map[group.priority].append(instance)
-                if backend.limits:
-                    self._backend_limits[id(instance)] = backend.limits
+                priority_map[group.priority].append(cls(backend))
 
         self.priority_groups = [priority_map[priority] for priority in sorted(priority_map)]
 
         model_counter: dict[str, int] = defaultdict(int)
+        rate_key_counter: dict[str, int] = defaultdict(int)
         self._backend_labels: dict[int, str] = {}
+        self._backend_rate_keys: dict[int, str] = {}
+        self._backend_limits: dict[str, RateLimits] = {}
         for group in self.priority_groups:
             for backend in group:
                 model = backend.config.model
@@ -109,6 +110,15 @@ class Router:
                 else:
                     label = f"{model}-{model_counter[model]}"
                 self._backend_labels[id(backend)] = label
+                base_rate_key = self._make_rate_key(backend)
+                rate_key_counter[base_rate_key] += 1
+                rate_key = f"{base_rate_key}:{rate_key_counter[base_rate_key]}"
+                self._backend_rate_keys[id(backend)] = rate_key
+                if backend.config.limits:
+                    self._backend_limits[rate_key] = backend.config.limits
+
+        has_limits = bool(self._backend_limits)
+        self._rate_limiter = RateLimiter(state_file=state_file if has_limits else None)
 
         logger.info(
             "Router initialized with %d priority groups, %d total backends",
@@ -118,6 +128,39 @@ class Router:
 
     def _label(self, backend: BaseProvider) -> str:
         return self._backend_labels.get(id(backend), backend.name)
+
+    def _rate_key(self, backend: BaseProvider) -> str:
+        return self._backend_rate_keys.get(id(backend), self._make_rate_key(backend))
+
+    def save_state(self) -> None:
+        self._rate_limiter.save()
+
+    async def _save_state_if_due(self) -> None:
+        snapshot = self._rate_limiter.snapshot_if_due()
+        if not snapshot:
+            return
+        state_file, data = snapshot
+        try:
+            await asyncio.to_thread(self._rate_limiter.write_snapshot, state_file, data)
+        except OSError as e:
+            self._rate_limiter.mark_dirty()
+            logger.warning("Failed to save rate limiter state: %s", e)
+
+    @staticmethod
+    def _make_rate_key(backend: BaseProvider) -> str:
+        config = backend.config
+        identity = {
+            "provider": config.provider,
+            "model": config.model,
+            "base_url": config.base_url or "",
+            "name": config.name or "",
+            "has_limits": bool(config.limits),
+            "api_key_sha256": hashlib.sha256(config.api_key.encode("utf-8")).hexdigest(),
+        }
+        raw = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+        readable = config.name or config.provider
+        return f"{config.provider}:{config.model}:{readable}:{digest}"
 
     async def route(
         self,
@@ -162,13 +205,15 @@ class Router:
                     elapsed,
                     usage_str,
                 )
-                limits = self._backend_limits.get(id(backend))
+                rate_key = self._rate_key(backend)
+                limits = self._backend_limits.get(rate_key)
                 if limits:
-                    self._rate_limiter.record_request(id(backend))
+                    self._rate_limiter.record_request(rate_key)
                     if usage:
                         total = usage.get("total_tokens", 0)
                         if total:
-                            self._rate_limiter.record_tokens(id(backend), total)
+                            self._rate_limiter.record_tokens(rate_key, total)
+                    await self._save_state_if_due()
                 return RoutedResponse(
                     content=content,
                     model=backend.config.model,
@@ -224,9 +269,10 @@ class Router:
                     label,
                     ttfb,
                 )
-                limits = self._backend_limits.get(id(backend))
+                rate_key = self._rate_key(backend)
+                limits = self._backend_limits.get(rate_key)
                 if limits:
-                    self._rate_limiter.record_request(id(backend))
+                    self._rate_limiter.record_request(rate_key)
                 raw_chunks = bool(buffered and isinstance(buffered[0], dict))
                 return PreparedStream(
                     model=backend.config.model,
@@ -266,8 +312,9 @@ class Router:
             for group in candidate_groups:
                 available = []
                 for backend in group:
-                    limits = self._backend_limits.get(id(backend))
-                    if limits and not self._rate_limiter.is_allowed(id(backend), limits):
+                    rate_key = self._rate_key(backend)
+                    limits = self._backend_limits.get(rate_key)
+                    if limits and not self._rate_limiter.is_allowed(rate_key, limits):
                         logger.debug(
                             "[%s] Skipping %s (rate limited)",
                             request_id,
@@ -359,13 +406,15 @@ class Router:
                     elapsed,
                     usage_str,
                 )
-            if usage:
-                limits = self._backend_limits.get(id(backend))
-                if limits:
+            rate_key = self._rate_key(backend)
+            limits = self._backend_limits.get(rate_key)
+            if limits:
+                if usage:
                     total = usage.get(
                         "total_tokens",
                         usage.get("prompt_tokens", usage.get("input_tokens", 0))
                         + usage.get("completion_tokens", usage.get("output_tokens", 0)),
                     )
                     if total:
-                        self._rate_limiter.record_tokens(id(backend), total)
+                        self._rate_limiter.record_tokens(rate_key, total)
+                await self._save_state_if_due()

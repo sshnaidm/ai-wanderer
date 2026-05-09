@@ -4,6 +4,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -34,9 +35,17 @@ from .router import (
 logger = logging.getLogger(__name__)
 
 
-def create_app(config: AppConfig) -> FastAPI:
-    app = FastAPI(title="ai-free-swap")
-    router = Router(config)
+def create_app(config: AppConfig, *, state_file: str | None = None) -> FastAPI:
+    router = Router(config, state_file=state_file)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        try:
+            yield
+        finally:
+            router.save_state()
+
+    app = FastAPI(title="ai-free-swap", lifespan=lifespan)
     server_api_key = config.server.api_key
     model_name = config.model_name
     show_provider = config.show_provider

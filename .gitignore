@@ -1,3 +1,4 @@
 config.yaml
 .codex
 .claude
+.rate_limit_state.json
