@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from ai_free_swap.config import AppConfig, BackendConfig, PriorityGroup, ServerConfig
+from ai_free_swap.config import AppConfig, BackendConfig, PriorityGroup, RateLimits, ServerConfig
 from ai_free_swap.providers.base import BaseProvider, register_provider
 
 import ai_free_swap.providers  # noqa: F401
@@ -69,6 +69,9 @@ def make_config(
                 if key in backend_data:
                     extra[key] = backend_data[key]
 
+            limits_data = backend_data.get("limits")
+            limits = RateLimits(**limits_data) if limits_data else None
+
             backends.append(
                 BackendConfig(
                     provider=backend_data.get("provider", "fake"),
@@ -76,6 +79,7 @@ def make_config(
                     model=backend_data.get("model", "test-model"),
                     name=backend_data.get("name"),
                     base_url=backend_data.get("base_url"),
+                    limits=limits,
                     extra=extra,
                 )
             )
