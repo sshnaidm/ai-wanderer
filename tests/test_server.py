@@ -61,6 +61,53 @@ class TestModelsEndpoint:
         assert data["data"][0]["owned_by"] == "ai-free-swap"
 
 
+class TestDashboard:
+    @pytest.mark.asyncio
+    async def test_dashboard_page_returns_html(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.get("/dashboard")
+        assert response.status_code == 200
+        assert "text/html" in response.headers["content-type"]
+        assert "ai-free-swap" in response.text
+        assert "/dashboard/data" in response.text
+
+    @pytest.mark.asyncio
+    async def test_dashboard_data_lists_backends(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.get("/dashboard/data")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["totals"]["backends"] == 1
+        assert data["backends"][0]["model"] == "test-model"
+        assert data["backends"][0]["status"] == "idle"
+
+    @pytest.mark.asyncio
+    async def test_dashboard_data_updates_after_request(self, app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            completion = await ac.post("/v1/chat/completions", json=_chat_payload())
+            response = await ac.get("/dashboard/data")
+
+        assert completion.status_code == 200
+        data = response.json()
+        assert data["totals"]["attempts"] == 1
+        assert data["totals"]["successes"] == 1
+        assert data["totals"]["success_rate"] == 100
+        assert data["backends"][0]["status"] == "healthy"
+
+    @pytest.mark.asyncio
+    async def test_dashboard_data_marks_rate_limited_backend(self):
+        app = create_app(make_config([[{"model": "test-model", "response": "limited", "limits": {"rpd": 1}}]]))
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            completion = await ac.post("/v1/chat/completions", json=_chat_payload())
+            response = await ac.get("/dashboard/data")
+
+        assert completion.status_code == 200
+        backend = response.json()["backends"][0]
+        assert backend["rate_limited"] is True
+        assert backend["status"] == "limited"
+
+
 class TestChatCompletions:
     @pytest.mark.asyncio
     async def test_basic_completion_returns_actual_backend_model(self, app):
@@ -467,6 +514,20 @@ class TestAuthentication:
         async with AsyncClient(transport=ASGITransport(app=authed_app), base_url="http://test") as ac:
             response = await ac.get("/health")
         assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_dashboard_is_public_even_when_auth_is_enabled(self, authed_app):
+        async with AsyncClient(transport=ASGITransport(app=authed_app), base_url="http://test") as ac:
+            page = await ac.get("/dashboard")
+            data = await ac.get("/dashboard/data")
+        assert page.status_code == 200
+        assert data.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_favicon_is_public_even_when_auth_is_enabled(self, authed_app):
+        async with AsyncClient(transport=ASGITransport(app=authed_app), base_url="http://test") as ac:
+            response = await ac.get("/favicon.ico")
+        assert response.status_code == 204
 
 
 class TestResponsesAPI:

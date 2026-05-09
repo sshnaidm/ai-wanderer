@@ -64,6 +64,78 @@ class PreparedStream:
     raw_chunks: bool = False
 
 
+@dataclass
+class BackendMetrics:
+    key: str
+    label: str
+    provider: str
+    model: str
+    name: str
+    priority: int
+    limits: dict[str, int | None]
+    active: int = 0
+    attempts: int = 0
+    successes: int = 0
+    failures: int = 0
+    rate_limited_skips: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    total_latency_ms: float = 0.0
+    last_latency_ms: float | None = None
+    last_started_at: float | None = None
+    last_finished_at: float | None = None
+    last_success_at: float | None = None
+    last_failure_at: float | None = None
+    last_error: str = ""
+
+    def as_dict(
+        self,
+        rate_counters: dict[str, dict[str, int]] | None = None,
+        *,
+        rate_limited: bool = False,
+    ) -> dict[str, Any]:
+        success_rate = (self.successes / self.attempts * 100) if self.attempts else None
+        avg_latency = self.total_latency_ms / self.successes if self.successes else None
+        status = "idle"
+        if self.active:
+            status = "running"
+        elif rate_limited:
+            status = "limited"
+        elif self.last_error and (not self.last_success_at or (self.last_failure_at or 0) >= self.last_success_at):
+            status = "failing"
+        elif self.successes:
+            status = "healthy"
+        return {
+            "key": self.key,
+            "label": self.label,
+            "provider": self.provider,
+            "model": self.model,
+            "name": self.name,
+            "priority": self.priority,
+            "limits": self.limits,
+            "status": status,
+            "rate_limited": rate_limited,
+            "active": self.active,
+            "attempts": self.attempts,
+            "successes": self.successes,
+            "failures": self.failures,
+            "rate_limited_skips": self.rate_limited_skips,
+            "success_rate": success_rate,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "avg_latency_ms": avg_latency,
+            "last_latency_ms": self.last_latency_ms,
+            "last_started_at": self.last_started_at,
+            "last_finished_at": self.last_finished_at,
+            "last_success_at": self.last_success_at,
+            "last_failure_at": self.last_failure_at,
+            "last_error": self.last_error,
+            "rate_counters": rate_counters or {},
+        }
+
+
 def _format_error(e: Exception) -> str:
     status = getattr(e, "status_code", None)
     msg = str(e)
@@ -77,8 +149,10 @@ class Router:
         self.keep_cycles = config.keep_cycles
         self.model_name = config.model_name
         self.model_routing = config.model_routing
+        self._started_at = time.time()
 
         priority_map: dict[int, list[BaseProvider]] = defaultdict(list)
+        backend_priorities: dict[int, int] = {}
         for group in sorted(config.providers, key=lambda g: g.priority):
             for backend in group.backends:
                 cls = PROVIDER_REGISTRY.get(backend.provider)
@@ -91,7 +165,9 @@ class Router:
                             f"Either use a known provider ({', '.join(sorted(PROVIDER_REGISTRY))}) "
                             f"or set base_url for an OpenAI-compatible endpoint."
                         )
-                priority_map[group.priority].append(cls(backend))
+                instance = cls(backend)
+                priority_map[group.priority].append(instance)
+                backend_priorities[id(instance)] = group.priority
 
         self.priority_groups = [priority_map[priority] for priority in sorted(priority_map)]
 
@@ -100,6 +176,7 @@ class Router:
         self._backend_labels: dict[int, str] = {}
         self._backend_rate_keys: dict[int, str] = {}
         self._backend_limits: dict[str, RateLimits] = {}
+        self._backend_metrics: dict[str, BackendMetrics] = {}
         for group in self.priority_groups:
             for backend in group:
                 model = backend.config.model
@@ -116,6 +193,15 @@ class Router:
                 self._backend_rate_keys[id(backend)] = rate_key
                 if backend.config.limits:
                     self._backend_limits[rate_key] = backend.config.limits
+                self._backend_metrics[rate_key] = BackendMetrics(
+                    key=rate_key,
+                    label=label,
+                    provider=backend.config.provider,
+                    model=backend.config.model,
+                    name=backend.config.name or "",
+                    priority=backend_priorities[id(backend)],
+                    limits=backend.config.limits.model_dump() if backend.config.limits else {},
+                )
 
         has_limits = bool(self._backend_limits)
         self._rate_limiter = RateLimiter(state_file=state_file if has_limits else None)
@@ -134,6 +220,42 @@ class Router:
 
     def save_state(self) -> None:
         self._rate_limiter.save()
+
+    def dashboard_snapshot(self) -> dict[str, Any]:
+        rate_data = self._rate_limiter.counters_snapshot()
+        backends = [
+            metrics.as_dict(
+                rate_data.get(key, {}),
+                rate_limited=bool(
+                    (limits := self._backend_limits.get(key)) and not self._rate_limiter.is_allowed(key, limits)
+                ),
+            )
+            for key, metrics in sorted(
+                self._backend_metrics.items(),
+                key=lambda item: (item[1].priority, item[1].model, item[1].label),
+            )
+        ]
+        totals = {
+            "backends": len(backends),
+            "active": sum(item["active"] for item in backends),
+            "attempts": sum(item["attempts"] for item in backends),
+            "successes": sum(item["successes"] for item in backends),
+            "failures": sum(item["failures"] for item in backends),
+            "rate_limited_skips": sum(item["rate_limited_skips"] for item in backends),
+            "prompt_tokens": sum(item["prompt_tokens"] for item in backends),
+            "completion_tokens": sum(item["completion_tokens"] for item in backends),
+            "total_tokens": sum(item["total_tokens"] for item in backends),
+        }
+        totals["success_rate"] = (totals["successes"] / totals["attempts"] * 100) if totals["attempts"] else None
+        return {
+            "generated_at": time.time(),
+            "started_at": self._started_at,
+            "model_name": self.model_name,
+            "model_routing": self.model_routing,
+            "keep_cycles": self.keep_cycles,
+            "totals": totals,
+            "backends": backends,
+        }
 
     async def _save_state_if_due(self) -> None:
         snapshot = self._rate_limiter.snapshot_if_due()
@@ -162,6 +284,51 @@ class Router:
         readable = config.name or config.provider
         return f"{config.provider}:{config.model}:{readable}:{digest}"
 
+    def _metrics(self, backend: BaseProvider) -> BackendMetrics:
+        return self._backend_metrics[self._rate_key(backend)]
+
+    def _record_backend_start(self, backend: BaseProvider) -> None:
+        metrics = self._metrics(backend)
+        metrics.active += 1
+        metrics.attempts += 1
+        metrics.last_started_at = time.time()
+
+    def _record_backend_success(
+        self,
+        backend: BaseProvider,
+        elapsed_seconds: float,
+        usage: dict[str, int] | None,
+    ) -> None:
+        metrics = self._metrics(backend)
+        metrics.active = max(0, metrics.active - 1)
+        metrics.successes += 1
+        metrics.last_error = ""
+        metrics.last_latency_ms = elapsed_seconds * 1000
+        metrics.total_latency_ms += metrics.last_latency_ms
+        now = time.time()
+        metrics.last_finished_at = now
+        metrics.last_success_at = now
+        if usage:
+            prompt = usage.get("prompt_tokens", usage.get("input_tokens", 0))
+            completion = usage.get("completion_tokens", usage.get("output_tokens", 0))
+            total = usage.get("total_tokens", prompt + completion)
+            metrics.prompt_tokens += prompt
+            metrics.completion_tokens += completion
+            metrics.total_tokens += total
+
+    def _record_backend_failure(self, backend: BaseProvider, elapsed_seconds: float, error: Exception) -> None:
+        metrics = self._metrics(backend)
+        metrics.active = max(0, metrics.active - 1)
+        metrics.failures += 1
+        metrics.last_latency_ms = elapsed_seconds * 1000
+        now = time.time()
+        metrics.last_finished_at = now
+        metrics.last_failure_at = now
+        metrics.last_error = _format_error(error)
+
+    def _record_rate_limited_skip(self, backend: BaseProvider) -> None:
+        self._metrics(backend).rate_limited_skips += 1
+
     async def route(
         self,
         messages: list[dict],
@@ -176,9 +343,10 @@ class Router:
 
         for backend in self._iter_attempts(requested_model, request_id):
             label = self._label(backend)
+            t0 = time.monotonic()
+            self._record_backend_start(backend)
             try:
                 logger.debug("[%s] Trying sending request to %s", request_id, label)
-                t0 = time.monotonic()
                 result = await backend.complete(messages, **kwargs)
                 elapsed = time.monotonic() - t0
                 if isinstance(result, ProviderResponse):
@@ -213,6 +381,8 @@ class Router:
                         total = usage.get("total_tokens", 0)
                         if total:
                             self._rate_limiter.record_tokens(rate_key, total)
+                self._record_backend_success(backend, elapsed, usage)
+                if limits:
                     await self._save_state_if_due()
                 return RoutedResponse(
                     content=content,
@@ -230,6 +400,7 @@ class Router:
                     label,
                     _format_error(e),
                 )
+                self._record_backend_failure(backend, time.monotonic() - t0, e)
                 errors.append((backend.name, e))
 
         raise AllProvidersFailedError(errors)
@@ -248,9 +419,10 @@ class Router:
 
         for backend in self._iter_attempts(requested_model, request_id):
             label = self._label(backend)
+            t0 = time.monotonic()
+            self._record_backend_start(backend)
             try:
                 logger.debug("[%s] Trying sending request to %s (stream)", request_id, label)
-                t0 = time.monotonic()
                 stream = aiter(backend.stream(messages, **kwargs))
                 buffered: list[str] = []
                 while True:
@@ -289,6 +461,7 @@ class Router:
                     label,
                     _format_error(e),
                 )
+                self._record_backend_failure(backend, time.monotonic() - t0, e)
                 errors.append((backend.name, e))
 
         raise AllProvidersFailedError(errors)
@@ -315,6 +488,7 @@ class Router:
                     rate_key = self._rate_key(backend)
                     limits = self._backend_limits.get(rate_key)
                     if limits and not self._rate_limiter.is_allowed(rate_key, limits):
+                        self._record_rate_limited_skip(backend)
                         logger.debug(
                             "[%s] Skipping %s (rate limited)",
                             request_id,
@@ -365,6 +539,7 @@ class Router:
     ) -> AsyncGenerator[str | dict[str, Any], None]:
         label = self._label(backend)
         usage: dict[str, int] | None = None
+        stream_error: Exception | None = None
 
         for text in buffered:
             if isinstance(text, dict) and text.get("usage"):
@@ -378,6 +553,7 @@ class Router:
                         usage = chunk["usage"]
                     yield chunk
         except Exception as e:
+            stream_error = e
             logger.error(
                 "[%s] Streaming interrupted from %s: %s",
                 request_id,
@@ -417,4 +593,9 @@ class Router:
                     )
                     if total:
                         self._rate_limiter.record_tokens(rate_key, total)
+            if stream_error:
+                self._record_backend_failure(backend, elapsed, stream_error)
+            else:
+                self._record_backend_success(backend, elapsed, usage)
+            if limits:
                 await self._save_state_if_due()
