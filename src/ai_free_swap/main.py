@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 import uvicorn
 
@@ -49,7 +50,8 @@ def main():
     host = args.host or config.server.host
     port = args.port or config.server.port
 
-    app = create_app(config)
+    state_file = str(Path(args.config).parent / ".rate_limit_state.json")
+    app = create_app(config, state_file=state_file)
     uvicorn.run(app, host=host, port=port, log_level=args.log_level)
 
 

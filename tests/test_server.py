@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -71,6 +73,21 @@ class TestChatCompletions:
         assert data["choices"][0]["message"]["role"] == "assistant"
         assert data["choices"][0]["message"]["content"] == "hello from fake"
         assert data["choices"][0]["finish_reason"] == "stop"
+
+    @pytest.mark.asyncio
+    async def test_parallel_requests_are_not_serialized(self):
+        app = create_app(make_config([[{"model": "test-model", "response": "slow", "delay": 0.2}]]))
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            start = time.perf_counter()
+            responses = await asyncio.gather(
+                ac.post("/v1/chat/completions", json=_chat_payload()),
+                ac.post("/v1/chat/completions", json=_chat_payload()),
+            )
+            elapsed = time.perf_counter() - start
+
+        assert [response.status_code for response in responses] == [200, 200]
+        assert elapsed < 0.35
 
     @pytest.mark.asyncio
     async def test_requested_model_routes_to_matching_backend(self):

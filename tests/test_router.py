@@ -72,6 +72,46 @@ class TestRouterInit:
         label = router._label(backend)
         assert label == "test-model-1"
 
+    def test_rate_key_does_not_require_unique_name(self):
+        router = Router(
+            make_config(
+                [
+                    [
+                        {"name": "shared", "api_key": "key-a", "limits": {"rpd": 1}},
+                        {"name": "shared", "api_key": "key-b", "limits": {"rpd": 1}},
+                    ]
+                ]
+            )
+        )
+        keys = [router._rate_key(backend) for backend in router.priority_groups[0]]
+        assert len(set(keys)) == 2
+
+    def test_rate_key_is_stable_across_reorder(self):
+        router1 = Router(
+            make_config(
+                [
+                    [
+                        {"name": "shared", "api_key": "key-a", "limits": {"rpd": 1}},
+                        {"name": "shared", "api_key": "key-b", "limits": {"rpd": 1}},
+                    ]
+                ]
+            )
+        )
+        router2 = Router(
+            make_config(
+                [
+                    [
+                        {"name": "shared", "api_key": "key-b", "limits": {"rpd": 1}},
+                        {"name": "shared", "api_key": "key-a", "limits": {"rpd": 1}},
+                    ]
+                ]
+            )
+        )
+
+        key1 = next(router1._rate_key(b) for b in router1.priority_groups[0] if b.config.api_key == "key-a")
+        key2 = next(router2._rate_key(b) for b in router2.priority_groups[0] if b.config.api_key == "key-a")
+        assert key1 == key2
+
 
 class TestRouterRoute:
     @pytest.mark.asyncio
@@ -257,6 +297,27 @@ class TestRouterRateLimiting:
         prepared2 = await router.prepare_stream(messages)
         chunks2 = [chunk async for chunk in prepared2.chunks]
         assert "".join(chunks2).strip() == "fallback stream"
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_state_persists_across_router_instances(self, messages, tmp_path):
+        state_file = tmp_path / "state.json"
+        config = make_config(
+            [
+                [{"response": "from limited", "limits": {"rpd": 1}}],
+                [{"response": "from fallback"}],
+            ]
+        )
+
+        router1 = Router(config, state_file=str(state_file))
+        with patch("ai_free_swap.router.random.sample", side_effect=lambda group, _: group):
+            result1 = await router1.route(messages)
+        assert result1.content == "from limited"
+        router1.save_state()
+
+        router2 = Router(config, state_file=str(state_file))
+        with patch("ai_free_swap.router.random.sample", side_effect=lambda group, _: group):
+            result2 = await router2.route(messages)
+        assert result2.content == "from fallback"
 
 
 class TestRouterStream:
