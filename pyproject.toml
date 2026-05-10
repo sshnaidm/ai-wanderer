@@ -35,5 +35,8 @@ ai-free-swap = "ai_free_swap.main:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+ai_free_swap = ["templates/*.html"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
