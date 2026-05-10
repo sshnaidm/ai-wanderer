@@ -1,4 +1,6 @@
-# ai-free-swap
+# AI Wanderer
+
+![ai-free-swap dashboard showing priority-based model routing, backend health, rate limits, and usage metrics](docs/assets/dashboard.png)
 
 An OpenAI- and Anthropic-compatible proxy server that routes your requests
 through multiple free-tier AI providers. If one provider is down or rate-limited,
