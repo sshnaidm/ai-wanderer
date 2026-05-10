@@ -11,6 +11,10 @@ handles the rest. Your app talks to one local endpoint, and ai-free-swap finds a
 working provider behind the scenes. Both OpenAI SDK and Anthropic SDK clients
 work out of the box.
 
+The server also includes an operations dashboard at `/dashboard`, per-backend
+request/token limits to protect free-tier quotas, and live metrics for attempts,
+latency, status, token usage, and fallback behavior.
+
 ## One-Click Deploy
 
 Deploy your own instance directly from this repo -- no fork needed:
@@ -36,12 +40,14 @@ Oracle Cloud free tier).
   - [Top-Level Settings](#top-level-settings)
   - [Server Settings](#server-settings)
   - [Provider Settings](#provider-settings)
+  - [Rate Limits](#rate-limits)
   - [Environment Variables for API Keys](#environment-variables-for-api-keys)
   - [Priority and Fallback](#priority-and-fallback)
   - [Custom OpenAI-Compatible Providers](#custom-openai-compatible-providers)
   - [Full Configuration Example](#full-configuration-example)
 - [Supported Providers](#supported-providers)
 - [Using with Applications](#using-with-applications)
+- [Dashboard](#dashboard)
 - [Command-Line Options](#command-line-options)
 - [Securing the Proxy](#securing-the-proxy)
 - [Troubleshooting](#troubleshooting)
@@ -72,6 +78,8 @@ Your App                ai-free-swap                   Providers
 4. If a provider fails, the proxy automatically tries the next one.
 5. The response is returned in the same format the client used -- your app
    doesn't need to know which provider actually handled the request.
+6. The proxy records live backend metrics for the dashboard and skips backends
+   whose configured request or token limits are already reached.
 
 ---
 
@@ -140,6 +148,9 @@ ai-free-swap --config config.yaml
 ```
 
 The server starts at `http://localhost:8000`.
+
+Open `http://localhost:8000/dashboard` to view backend status, priority groups,
+success rates, latency, token usage, and rate-limit counters.
 
 ### 5. Send a Request
 
@@ -244,7 +255,52 @@ Each backend supports these fields:
 | `model` | Yes | Model identifier to use with this provider. |
 | `name` | No | Friendly name for this backend. Shown in logs and in the `provider_name` response field. |
 | `base_url` | No | Override the provider's API URL. Required for custom/self-hosted providers. |
+| `limits` | No | Per-backend request/token limits. See [Rate Limits](#rate-limits). |
 | `extra` | No | Provider-specific options (e.g., `timeout`, `default_max_tokens`). |
+
+### Rate Limits
+
+Use `limits` on any backend to keep usage within free-tier quotas. Limits are
+per backend, so two API keys for the same provider can have separate counters.
+When a backend is already at its limit, ai-free-swap skips it and tries the next
+available backend in priority order.
+
+```yaml
+providers:
+  - priority: 1
+    backends:
+      - provider: gemini
+        name: "gemini-free-tier"
+        api_key: "${GEMINI_API_KEY}"
+        model: "gemini-2.5-flash"
+        limits:
+          rpm: 15        # requests per minute
+          rph: 500       # requests per hour
+          rpd: 1500      # requests per day
+          tpm: 1000000   # tokens per minute
+          tph: 10000000  # tokens per hour
+          tpd: 50000000  # tokens per day
+```
+
+Supported fields:
+
+| Field | Meaning |
+|-------|---------|
+| `rpm` | Requests per minute |
+| `rph` | Requests per hour |
+| `rpd` | Requests per day |
+| `tpm` | Tokens per minute |
+| `tph` | Tokens per hour |
+| `tpd` | Tokens per day |
+
+Request counters are recorded for successful non-streaming calls and for
+streams that successfully start. Token counters use provider-reported usage when
+available; providers that do not report usage still work, but token counters and
+token limits may not advance for those calls.
+
+Rate-limit counters use UTC minute/hour/day windows and are persisted in
+`.rate_limit_state.json` next to your config file. The file is saved
+periodically and on shutdown, and it is ignored by git.
 
 ### Environment Variables for API Keys
 
@@ -283,6 +339,8 @@ The priority number determines the order providers are tried:
 - **Lower numbers are tried first** (priority 1 before priority 2).
 - **Within the same priority**, backends are tried in **random order** -- this
   distributes load across multiple accounts or keys.
+- Backends with configured limits are skipped while their current window is
+  exhausted.
 - If all backends in a priority group fail, the proxy moves to the next group.
 - After all groups are exhausted, the cycle repeats up to `keep_cycles` times.
 
@@ -298,6 +356,9 @@ providers:
         name: "gemini-key-1"
         api_key: "${GEMINI_KEY_1}"
         model: "gemini-2.5-flash"
+        limits:
+          rpm: 15
+          rpd: 1500
       - provider: gemini
         name: "gemini-key-2"
         api_key: "${GEMINI_KEY_2}"
@@ -380,6 +441,10 @@ providers:
         name: "gemini-flash-1"
         api_key: "${GEMINI_API_KEY_1}"
         model: "gemini-2.5-flash"
+        limits:
+          rpm: 15
+          rpd: 1500
+          tpd: 50000000
       - provider: gemini
         name: "gemini-flash-2"
         api_key: "${GEMINI_API_KEY_2}"
@@ -562,6 +627,38 @@ uses the Anthropic SDK with a configurable base URL.
 
 ---
 
+## Dashboard
+
+Open the dashboard in a browser:
+
+```text
+http://localhost:8000/dashboard
+```
+
+The dashboard shows:
+
+- Models grouped by configured priority, so primary and fallback routes are
+  visible separately.
+- Backend status: `idle`, `running`, `healthy`, `failing`, or `limited`.
+- Attempts, successes, failures, success rate, active calls, and latency.
+- Prompt, completion, and total token usage when providers report usage.
+- Rate-limit skip counts and current request windows.
+- Light and dark themes; the selected theme is saved in the browser.
+
+The backing JSON endpoint is:
+
+```text
+GET /dashboard/data
+```
+
+`/dashboard` and `/dashboard/data` are public endpoints, even when
+`server.api_key` is set. They do not expose API keys, but they do expose backend
+names, models, priorities, status, and usage metrics. If that information is
+sensitive, restrict network access to the proxy or put it behind an external
+auth layer.
+
+---
+
 ## Command-Line Options
 
 ```
@@ -587,6 +684,10 @@ ai-free-swap --log-level debug
 # Run as a Python module
 python -m ai_free_swap --config config.yaml
 ```
+
+When any backend has `limits` configured, runtime counters are stored in
+`.rate_limit_state.json` in the same directory as the config file selected with
+`--config`.
 
 ---
 
@@ -618,6 +719,10 @@ curl http://your-server:8000/v1/messages \
 
 The `/health` endpoint is always public (no key required).
 
+The dashboard endpoints (`/dashboard` and `/dashboard/data`) and `/favicon.ico`
+are also public. Keep the service on a trusted network or add external access
+control if dashboard metadata should not be visible.
+
 ---
 
 ## Troubleshooting
@@ -629,6 +734,10 @@ YAML. If using `${ENV_VAR}` syntax, make sure the environment variables are set.
 valid. Run with `--log-level debug` to see which providers were tried and why
 each failed. Increase `keep_cycles` to retry more times.
 
+If configured rate limits are exhausted, the proxy skips those backends until
+the current UTC minute/hour/day window rolls over. Check `/dashboard` for
+`limited` status and rate-limit skip counts.
+
 **"Model 'xyz' is not configured" (400)** -- The model name in your request
 doesn't match any configured backend. Use `"aifree"` to use any available
 provider, or check your config for the exact model names.
@@ -636,6 +745,10 @@ provider, or check your config for the exact model names.
 **Server not reachable** -- Check the port isn't already in use. In Docker,
 make sure you used `-p 8000:8000`. If `host` is `127.0.0.1`, the server only
 accepts local connections -- change to `0.0.0.0`.
+
+**Dashboard does not update token totals** -- Token metrics depend on usage data
+reported by the upstream provider. Some providers or streaming responses may not
+include usage, so request metrics can update while token metrics remain zero.
 
 ---
 
