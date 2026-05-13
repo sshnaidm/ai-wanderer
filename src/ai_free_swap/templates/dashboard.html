@@ -25,6 +25,10 @@
       --cyan: #087a8f;
       --cyan-soft: #d8f4f8;
       --gray-soft: #edf1f6;
+      --danger-panel: #fff7f6;
+      --warning-panel: #fffaf0;
+      --success-panel: #f3fbf6;
+      --info-panel: #f5f8ff;
     }
     :root[data-theme="dark"] {
       color-scheme: dark;
@@ -46,6 +50,10 @@
       --cyan: #64d7e6;
       --cyan-soft: #15343b;
       --gray-soft: #273140;
+      --danger-panel: #21191b;
+      --warning-panel: #211d15;
+      --success-panel: #15211a;
+      --info-panel: #151b28;
     }
     * { box-sizing: border-box; }
     body {
@@ -102,7 +110,11 @@
       border-radius: 8px;
       box-shadow: var(--shadow);
     }
-    .kpi { padding: 14px; min-height: 88px; }
+    .kpi { padding: 14px; min-height: 88px; border-top: 3px solid var(--line); }
+    .kpi.good { border-top-color: var(--green); }
+    .kpi.warn { border-top-color: var(--amber); }
+    .kpi.bad { border-top-color: var(--red); }
+    .kpi.info { border-top-color: var(--blue); }
     .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; }
     .kpi .value { font-size: 28px; font-weight: 750; margin-top: 8px; line-height: 1; }
     .kpi .hint { color: var(--muted); margin-top: 8px; font-size: 12px; }
@@ -128,6 +140,11 @@
       overflow: hidden;
       background: var(--panel-soft);
     }
+    .priority-group.group-strong { border-color: color-mix(in srgb, var(--green) 45%, var(--line)); }
+    .priority-group.group-warning { border-color: color-mix(in srgb, var(--amber) 45%, var(--line)); }
+    .priority-group.group-poor,
+    .priority-group.group-failing { border-color: color-mix(in srgb, var(--red) 55%, var(--line)); }
+    .priority-group.group-running { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); }
     .priority-head {
       display: flex;
       justify-content: space-between;
@@ -137,6 +154,11 @@
       border-left: 4px solid var(--blue);
       background: var(--panel);
     }
+    .priority-group.group-strong .priority-head { border-left-color: var(--green); }
+    .priority-group.group-warning .priority-head { border-left-color: var(--amber); }
+    .priority-group.group-poor .priority-head,
+    .priority-group.group-failing .priority-head { border-left-color: var(--red); }
+    .priority-group.group-running .priority-head { border-left-color: var(--blue); }
     .priority-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
     .priority-title strong { font-size: 15px; }
     .priority-note { color: var(--muted); font-size: 12px; }
@@ -149,10 +171,17 @@
     .model-card {
       background: var(--panel);
       border: 1px solid var(--line);
+      border-left: 4px solid var(--line);
       border-radius: 8px;
       padding: 12px;
       min-width: 0;
     }
+    .model-card.state-strong { border-left-color: var(--green); background: linear-gradient(90deg, var(--success-panel), var(--panel) 42%); }
+    .model-card.state-warning { border-left-color: var(--amber); background: linear-gradient(90deg, var(--warning-panel), var(--panel) 42%); }
+    .model-card.state-poor,
+    .model-card.state-failing { border-left-color: var(--red); background: linear-gradient(90deg, var(--danger-panel), var(--panel) 42%); }
+    .model-card.state-running { border-left-color: var(--blue); background: linear-gradient(90deg, var(--info-panel), var(--panel) 42%); }
+    .model-card.state-limited { border-left-color: var(--amber); background: linear-gradient(90deg, var(--warning-panel), var(--panel) 42%); }
     .model-top { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
     .backend-name { font-weight: 700; }
     .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
@@ -197,9 +226,20 @@
       margin-top: 6px;
     }
     .bar > span { display: block; height: 100%; background: var(--green); border-radius: 999px; }
+    .bar.warning > span { background: var(--amber); }
+    .bar.poor > span,
+    .bar.failing > span { background: var(--red); }
+    .bar.running > span { background: var(--blue); }
+    .bar.limited > span { background: var(--amber); }
     .failbar > span { background: var(--red); }
     .tokenbar > span { background: var(--cyan); }
     .spark-row { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+    .spark-row.state-strong { box-shadow: inset 3px 0 0 var(--green); }
+    .spark-row.state-warning { box-shadow: inset 3px 0 0 var(--amber); background: var(--warning-panel); }
+    .spark-row.state-poor,
+    .spark-row.state-failing { box-shadow: inset 3px 0 0 var(--red); background: var(--danger-panel); }
+    .spark-row.state-running { box-shadow: inset 3px 0 0 var(--blue); background: var(--info-panel); }
+    .spark-row.state-limited { box-shadow: inset 3px 0 0 var(--amber); background: var(--warning-panel); }
     .spark-row:last-child { border-bottom: 0; }
     .spark-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
     .spark-label { font-weight: 700; overflow-wrap: anywhere; }
@@ -209,7 +249,32 @@
       grid-template-columns: 1fr;
       gap: 12px;
     }
-    .error-text { color: var(--red); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 10px; }
+    .error-card {
+      margin-top: 12px;
+      border: 1px solid color-mix(in srgb, var(--red) 35%, var(--line));
+      border-radius: 8px;
+      background: var(--danger-panel);
+      color: var(--red);
+      padding: 10px 12px;
+    }
+    .error-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      margin-bottom: 3px;
+    }
+    .error-card strong { display: block; font-size: 14px; }
+    .error-card p {
+      margin: 5px 0 0;
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.35;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
     .empty { padding: 18px; color: var(--muted); }
     @media (max-width: 1100px) {
       .kpis { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
@@ -243,11 +308,11 @@
     </header>
 
     <section class="kpis">
-      <div class="panel kpi"><div class="label">Active</div><div class="value" id="kActive">0</div><div class="hint">running provider calls</div></div>
-      <div class="panel kpi"><div class="label">Success</div><div class="value" id="kSuccess">-</div><div class="hint" id="kSuccessHint">0 attempts</div></div>
-      <div class="panel kpi"><div class="label">Failures</div><div class="value" id="kFailures">0</div><div class="hint">provider failures</div></div>
-      <div class="panel kpi"><div class="label">Rate Limited</div><div class="value" id="kLimited">0</div><div class="hint">skipped attempts</div></div>
-      <div class="panel kpi"><div class="label">Backends</div><div class="value" id="kBackends">0</div><div class="hint">configured providers</div></div>
+      <div class="panel kpi info"><div class="label">Active</div><div class="value" id="kActive">0</div><div class="hint">running provider calls</div></div>
+      <div class="panel kpi good"><div class="label">Success</div><div class="value" id="kSuccess">-</div><div class="hint" id="kSuccessHint">0 attempts</div></div>
+      <div class="panel kpi bad"><div class="label">Failures</div><div class="value" id="kFailures">0</div><div class="hint">provider failures</div></div>
+      <div class="panel kpi warn"><div class="label">Rate Limited</div><div class="value" id="kLimited">0</div><div class="hint">skipped attempts</div></div>
+      <div class="panel kpi info"><div class="label">Backends</div><div class="value" id="kBackends">0</div><div class="hint">configured providers</div></div>
     </section>
 
     <main class="main-grid">
@@ -298,18 +363,40 @@
       });
     }
 
+    function healthState(item) {
+      if (item.status === "limited") return "limited";
+      if (item.status === "running") return "running";
+      if (item.status === "failing") return "failing";
+      if (item.success_rate === null || item.success_rate === undefined) return "idle";
+      if (item.success_rate >= 95) return "strong";
+      if (item.success_rate >= 75) return "warning";
+      if (item.success_rate > 0) return "poor";
+      return item.attempts ? "failing" : "idle";
+    }
+
+    function groupState(items, rate) {
+      if (items.some(item => item.active > 0)) return "running";
+      if (items.some(item => item.status === "limited")) return "limited";
+      if (rate === null || rate === undefined) return "idle";
+      if (rate >= 95) return "strong";
+      if (rate >= 75) return "warning";
+      if (rate > 0) return "poor";
+      return "failing";
+    }
+
     function bar(width, cls = "") {
       const safeWidth = Math.max(0, Math.min(100, width || 0));
       return `<div class="bar ${cls}"><span style="width:${safeWidth}%"></span></div>`;
     }
 
-    function renderSpark(container, rows, valueFn, labelFn, cls = "") {
+    function renderSpark(container, rows, valueFn, labelFn, cls = "", stateFn = null) {
       const max = Math.max(1, ...rows.map(valueFn));
       container.innerHTML = rows.map(item => {
         const value = valueFn(item);
-        return `<div class="spark-row">
+        const state = stateFn ? stateFn(item) : "";
+        return `<div class="spark-row ${state ? `state-${state}` : ""}">
           <div class="spark-head"><span class="spark-label">${esc(labelFn(item))}</span><span class="spark-value">${num(value)}</span></div>
-          ${bar(value / max * 100, cls)}
+          ${bar(value / max * 100, `${cls} ${state}`)}
         </div>`;
       }).join("") || `<div class="empty">No data yet</div>`;
     }
@@ -324,10 +411,42 @@
       return [...groups.entries()].sort((a, b) => a[0] - b[0]);
     }
 
+    function summarizeError(rawError) {
+      if (!rawError) return null;
+      const text = String(rawError).replace(/\s+/g, " ").trim();
+      const codeMatch = text.match(/\b(4\d\d|5\d\d)\b/);
+      const code = codeMatch ? codeMatch[1] : "";
+      const lower = text.toLowerCase();
+      let title = code ? `Provider error ${code}` : "Provider error";
+      if (code === "429" || lower.includes("quota") || lower.includes("rate limit")) {
+        title = code === "429" ? "Quota or rate limit reached" : "Rate limit reached";
+      } else if (code === "401" || code === "403" || lower.includes("api key") || lower.includes("auth")) {
+        title = "Authentication failed";
+      } else if (code && code.startsWith("5")) {
+        title = "Provider unavailable";
+      }
+
+      const messageMatch = text.match(/['"]message['"]\s*:\s*['"]([^'"]+)/i)
+        || text.match(/message="?([^"]+)/i);
+      let detail = messageMatch ? messageMatch[1] : text;
+      detail = detail
+        .replace(/^error message=/i, "")
+        .replace(/^Error code:\s*\d+\s*-\s*/i, "")
+        .replace(/^[{[\s'"]+/, "")
+        .trim();
+      if (detail.length > 150) detail = `${detail.slice(0, 147)}...`;
+      if (!detail || detail === text) {
+        detail = code ? `The provider returned HTTP ${code}. Check this backend's quota, credentials, or provider status.` : "Check this backend's quota, credentials, or provider status.";
+      }
+      return { title, detail };
+    }
+
     function renderModelCard(item) {
       const requestCount = item.successes + item.failures;
       const successWidth = item.success_rate === null ? 0 : item.success_rate;
-      return `<article class="model-card">
+      const state = healthState(item);
+      const error = summarizeError(item.last_error);
+      return `<article class="model-card state-${state}">
         <div class="model-top">
           <div>
             <div class="backend-name">${esc(item.label)}</div>
@@ -336,7 +455,7 @@
           <span class="pill ${statusClass(item.status)}">${esc(item.status)}</span>
         </div>
         <div class="model-name">${esc(item.model)}</div>
-        ${bar(successWidth)}
+        ${bar(successWidth, state)}
         <div class="stats">
           <div class="stat"><span>Success</span><strong>${pct(item.success_rate)}</strong></div>
           <div class="stat"><span>Requests</span><strong>${num(requestCount)}</strong></div>
@@ -345,7 +464,7 @@
           <div class="stat"><span>Tokens</span><strong>${num(item.total_tokens)}</strong></div>
           <div class="stat"><span>Limited</span><strong>${num(item.rate_limited_skips)}</strong></div>
         </div>
-        ${item.last_error ? `<div class="error-text" title="${esc(item.last_error)}">${esc(item.last_error)}</div>` : ""}
+        ${error ? `<div class="error-card" title="${esc(item.last_error)}"><span>Last error</span><strong>${esc(error.title)}</strong><p>${esc(error.detail)}</p></div>` : ""}
       </article>`;
     }
 
@@ -356,7 +475,8 @@
         const attempts = items.reduce((total, item) => total + item.attempts, 0);
         const successes = items.reduce((total, item) => total + item.successes, 0);
         const rate = attempts ? successes / attempts * 100 : null;
-        return `<section class="priority-group">
+        const state = groupState(items, rate);
+        return `<section class="priority-group group-${state}">
           <div class="priority-head">
             <div class="priority-title">
               <span class="pill priority-pill">Priority ${priority}</span>
@@ -385,7 +505,7 @@
       renderPriorityGroups(backends);
 
       const activeFirst = [...backends].sort((a, b) => (b.success_rate || 0) - (a.success_rate || 0));
-      renderSpark(document.getElementById("successBars"), activeFirst, item => item.success_rate || 0, item => item.label);
+      renderSpark(document.getElementById("successBars"), activeFirst, item => item.success_rate || 0, item => item.label, "", healthState);
       renderSpark(document.getElementById("tokenBars"), backends, item => item.total_tokens, item => item.label, "tokenbar");
       renderSpark(document.getElementById("windowBars"), backends, item => {
         const counters = item.rate_counters.requests || {};
