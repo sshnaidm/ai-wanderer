@@ -155,9 +155,8 @@ class Router:
         backend_priorities: dict[int, int] = {}
         for group in sorted(config.providers, key=lambda g: g.priority):
             for backend in group.backends:
-                backend = backend.model_copy(
-                    update={"extra": {**backend.extra, "_global_reasoning": config.reasoning}}
-                )
+                if backend.reasoning is None:
+                    backend = backend.model_copy(update={"reasoning": config.reasoning})
                 cls = PROVIDER_REGISTRY.get(backend.provider)
                 if cls is None:
                     if backend.base_url:

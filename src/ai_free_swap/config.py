@@ -48,6 +48,7 @@ class BackendConfig(BaseModel):
     name: str | None = None
     base_url: str | None = None
     limits: RateLimits | None = None
+    reasoning: bool | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("provider", "api_key", "model")

@@ -8,7 +8,6 @@ keep_cycles: 1  # How many full cycles through all priorities before returning f
 model_name: "aifree"  # Name returned by /v1/models and used as the default model alias
 show_provider: true  # Include provider_name in API responses
 model_routing: "any"  # "any" = ignore client model, "match" = route by model name
-reasoning: true  # Global reasoning toggle for providers that require it, such as DeepSeek
 
 server:
   host: "0.0.0.0"
@@ -43,6 +42,7 @@ providers:
       - provider: qwen
         api_key: "${DASHSCOPE_API_KEY}"
         model: "qwen-flash"
+        # Use provider: qwen-cn instead for China-region DashScope keys.
 
   # Priority 3
   - priority: 3

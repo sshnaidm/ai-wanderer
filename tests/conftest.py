@@ -90,6 +90,7 @@ def make_config(
                     name=backend_data.get("name"),
                     base_url=backend_data.get("base_url"),
                     limits=limits,
+                    reasoning=backend_data.get("reasoning"),
                     extra=extra,
                 )
             )

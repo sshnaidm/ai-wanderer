@@ -213,6 +213,22 @@ providers:
         assert backend.provider == "deepseek"
         assert backend.base_url is None
 
+    def test_backend_reasoning_override_is_allowed(self, tmp_path):
+        path = _write_yaml(
+            tmp_path,
+            """
+providers:
+  - priority: 1
+    backends:
+      - provider: deepseek
+        api_key: "key"
+        model: "deepseek-chat"
+        reasoning: false
+""",
+        )
+        backend = load_config(path).providers[0].backends[0]
+        assert backend.reasoning is False
+
     def test_base_url_allowed_on_any_provider(self, tmp_path):
         path = _write_yaml(
             tmp_path,
