@@ -100,7 +100,7 @@
     }
     .kpis {
       display: grid;
-      grid-template-columns: repeat(5, minmax(140px, 1fr));
+      grid-template-columns: repeat(6, minmax(130px, 1fr));
       gap: 12px;
       margin-bottom: 16px;
     }
@@ -118,6 +118,29 @@
     .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; }
     .kpi .value { font-size: 28px; font-weight: 750; margin-top: 8px; line-height: 1; }
     .kpi .hint { color: var(--muted); margin-top: 8px; font-size: 12px; }
+    .ratio-counts {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+      margin-top: 8px;
+      font-size: 12px;
+    }
+    .ratio-counts .passed { color: var(--green); font-weight: 700; }
+    .ratio-counts .failed { color: var(--red); font-weight: 700; }
+    .ratio-meter {
+      display: flex;
+      width: 100%;
+      height: 8px;
+      background: var(--gray-soft);
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+    .ratio-meter span { display: block; min-width: 0; transition: width 160ms ease; }
+    .ratio-meter .passed { background: var(--green); }
+    .ratio-meter .failed { background: var(--red); }
     .main-grid {
       display: grid;
       grid-template-columns: minmax(0, 1fr) 340px;
@@ -309,8 +332,14 @@
 
     <section class="kpis">
       <div class="panel kpi info"><div class="label">Active</div><div class="value" id="kActive">0</div><div class="hint">running provider calls</div></div>
+      <div class="panel kpi info"><div class="label">Total Tokens</div><div class="value" id="kTokens">0</div><div class="hint" id="kTokensHint">0 prompt | 0 output</div></div>
+      <div class="panel kpi good">
+        <div class="label">Passed / Failed</div>
+        <div class="value" id="kPassFail">0:0</div>
+        <div class="ratio-counts"><span class="passed" id="kPassed">0 passed</span><span class="failed" id="kFailed">0 failed</span></div>
+        <div class="ratio-meter" aria-label="Passed and failed requests"><span class="passed" id="kPassedBar"></span><span class="failed" id="kFailedBar"></span></div>
+      </div>
       <div class="panel kpi good"><div class="label">Success</div><div class="value" id="kSuccess">-</div><div class="hint" id="kSuccessHint">0 attempts</div></div>
-      <div class="panel kpi bad"><div class="label">Failures</div><div class="value" id="kFailures">0</div><div class="hint">provider failures</div></div>
       <div class="panel kpi warn"><div class="label">Rate Limited</div><div class="value" id="kLimited">0</div><div class="hint">skipped attempts</div></div>
       <div class="panel kpi info"><div class="label">Backends</div><div class="value" id="kBackends">0</div><div class="hint">configured providers</div></div>
     </section>
@@ -349,6 +378,19 @@
     const ms = value => value === null || value === undefined ? "-" : `${Math.round(value)} ms`;
     const when = seconds => seconds ? new Date(seconds * 1000).toLocaleTimeString() : "-";
     const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+
+    function gcd(a, b) {
+      let x = Math.abs(Math.round(a || 0));
+      let y = Math.abs(Math.round(b || 0));
+      while (y) [x, y] = [y, x % y];
+      return x || 1;
+    }
+
+    function passFailRatio(passed, failed) {
+      if (!passed && !failed) return "0:0";
+      const divisor = gcd(passed, failed);
+      return `${num(passed / divisor)}:${num(failed / divisor)}`;
+    }
 
     function statusClass(status) {
       return ["healthy", "running", "failing", "limited", "idle"].includes(status) ? status : "idle";
@@ -493,12 +535,23 @@
     function render(data) {
       const totals = data.totals;
       const backends = data.backends;
+      const passed = totals.successes || 0;
+      const failed = totals.failures || 0;
+      const passFailTotal = passed + failed;
+      const passedWidth = passFailTotal ? passed / passFailTotal * 100 : 0;
+      const failedWidth = passFailTotal ? failed / passFailTotal * 100 : 0;
       document.getElementById("subtitle").textContent = `${data.model_name} | routing: ${data.model_routing} | cycles: ${data.keep_cycles}`;
       document.getElementById("statusLine").textContent = `Updated ${when(data.generated_at)} | started ${when(data.started_at)}`;
       document.getElementById("kActive").textContent = num(totals.active);
+      document.getElementById("kTokens").textContent = num(totals.total_tokens);
+      document.getElementById("kTokensHint").textContent = `${num(totals.prompt_tokens)} prompt | ${num(totals.completion_tokens)} output`;
+      document.getElementById("kPassFail").textContent = passFailRatio(passed, failed);
+      document.getElementById("kPassed").textContent = `${num(passed)} passed`;
+      document.getElementById("kFailed").textContent = `${num(failed)} failed`;
+      document.getElementById("kPassedBar").style.width = `${passedWidth}%`;
+      document.getElementById("kFailedBar").style.width = `${failedWidth}%`;
       document.getElementById("kSuccess").textContent = pct(totals.success_rate);
       document.getElementById("kSuccessHint").textContent = `${num(totals.attempts)} attempts`;
-      document.getElementById("kFailures").textContent = num(totals.failures);
       document.getElementById("kLimited").textContent = num(totals.rate_limited_skips);
       document.getElementById("kBackends").textContent = num(totals.backends);
       document.getElementById("modelCount").textContent = `${num(backends.length)} models`;
