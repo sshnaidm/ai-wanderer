@@ -218,7 +218,7 @@ cp config.yaml.example config.yaml
 | `model_name` | `"aifree"` | The model name shown in `/v1/models`. Clients can use this name or any backend model name directly. |
 | `show_provider` | `true` | When `true`, responses include a `provider_name` field showing which provider handled the request. Set to `false` to hide this. |
 | `model_routing` | `"any"` | How to handle the model name from client requests. `"any"` (default) ignores the client model and uses all providers in priority order -- best for proxy use cases where clients send arbitrary model names. `"match"` routes to backends whose configured model matches the request, falling back to all providers if no match is found -- useful when you configure multiple distinct models and want clients to choose. |
-| `reasoning` | `true` | Optional global reasoning toggle for providers that require an explicit request flag. DeepSeek backends always receive `extra_body.reasoning.enabled`; omit this setting to use `true`, or set it to `false` only when a DeepSeek model requires reasoning disabled. |
+| `reasoning` | `true` | Optional global reasoning toggle for providers that require an explicit request flag. DeepSeek backends receive `extra_body.reasoning.enabled` automatically; omit this setting to use `true`, or set it to `false` when you need reasoning disabled by default. Backend `reasoning`, backend `extra_body_defaults`, and client request `extra_body` can override this value. |
 
 ### Server Settings
 
@@ -275,8 +275,9 @@ extra:
 
 `request_kwargs_defaults` applies defaults for supported OpenAI chat request
 arguments. `extra_body_defaults` is deep-merged into the provider-specific
-`extra_body`. Client requests still win when they explicitly set the same
-field.
+`extra_body`. Built-in provider defaults are applied first, backend defaults can
+override those defaults, and client requests still win when they explicitly set
+the same field.
 
 ### Rate Limits
 
@@ -393,6 +394,9 @@ providers:
         api_key: "${QWEN_KEY}"
         model: "qwen-flash"
 ```
+
+`provider: qwen` uses DashScope International. Use `provider: qwen-cn` for
+China-region DashScope keys.
 
 ### Custom OpenAI-Compatible Providers
 
