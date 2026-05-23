@@ -117,9 +117,7 @@ def _apply_request_kwargs_defaults(config: BackendConfig, known_kwargs: dict[str
     if not configured:
         return known_kwargs
     filtered = {
-        key: value
-        for key, value in configured.items()
-        if key in OPENAI_CHAT_KNOWN_ARGS or key.startswith("extra_")
+        key: value for key, value in configured.items() if key in OPENAI_CHAT_KNOWN_ARGS or key.startswith("extra_")
     }
     return merge_defaults(known_kwargs, filtered)
 

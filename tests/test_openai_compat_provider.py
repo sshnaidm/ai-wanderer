@@ -20,11 +20,11 @@ def _provider(
             provider=provider,
             api_key="test-key",
             model=model,
-            base_url=base_url
-            if base_url is not None
-            else "https://generativelanguage.googleapis.com/v1beta/openai/"
-            if provider == "openai_compat"
-            else None,
+            base_url=(
+                base_url
+                if base_url is not None
+                else "https://generativelanguage.googleapis.com/v1beta/openai/" if provider == "openai_compat" else None
+            ),
             reasoning=reasoning,
             extra=extra or {},
         )
@@ -163,9 +163,7 @@ class TestDeepSeekReasoningExtraBody:
         assert kwargs["extra_body"]["reasoning"] == {"enabled": False, "budget": 2048}
 
     def test_merges_enabled_into_client_reasoning_object(self):
-        kwargs = _provider(provider="deepseek", model="deepseek-chat")._split_kwargs(
-            {"reasoning": {"budget": 2048}}
-        )
+        kwargs = _provider(provider="deepseek", model="deepseek-chat")._split_kwargs({"reasoning": {"budget": 2048}})
 
         assert kwargs["extra_body"]["reasoning"] == {"budget": 2048, "enabled": True}
 
