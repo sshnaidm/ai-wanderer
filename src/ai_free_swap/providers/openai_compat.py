@@ -14,6 +14,7 @@ PROVIDER_BASE_URLS = {
     "openai": None,
     "openrouter": "https://openrouter.ai/api/v1",
     "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "deepseek": "https://api.deepseek.com",
 }
 
 _OPENAI_CLIENT_EXTRA_KEYS = {"timeout"}
@@ -48,6 +49,7 @@ _OPENAI_CHAT_KNOWN_ARGS = {
     "web_search_options",
 }
 _GEMINI_THOUGHT_SIGNATURE_SKIP = "skip_thought_signature_validator"
+_GLOBAL_REASONING_EXTRA_KEY = "_global_reasoning"
 
 
 def _make_openai_provider(provider_name: str):
@@ -131,14 +133,51 @@ class OpenAICompatProvider(BaseProvider):
                 client_kwargs[key] = self.config.extra[key]
         return AsyncOpenAI(**client_kwargs)
 
+    def _needs_reasoning_extra_body(self) -> bool:
+        model = self.config.model.strip().lower()
+        if "deepseek" in model:
+            return True
+        provider = self.config.provider.strip().lower()
+        base_url = (self.config.base_url or PROVIDER_BASE_URLS.get(provider) or "").lower()
+        return provider == "deepseek" or "api.deepseek.com" in base_url
+
+    def _provider_extra_body_defaults(self) -> dict[str, Any]:
+        if not self._needs_reasoning_extra_body():
+            return {}
+        return {
+            "reasoning": {
+                "enabled": bool(self.config.extra.get(_GLOBAL_REASONING_EXTRA_KEY, True)),
+            }
+        }
+
+    @staticmethod
+    def _merge_extra_body_defaults(extra_body: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+        merged = copy.deepcopy(extra_body)
+        for key, value in defaults.items():
+            if key not in merged:
+                merged[key] = copy.deepcopy(value)
+                continue
+            if isinstance(merged[key], dict) and isinstance(value, dict):
+                for nested_key, nested_value in value.items():
+                    merged[key].setdefault(nested_key, copy.deepcopy(nested_value))
+        return merged
+
     def _split_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         known_kwargs: dict[str, Any] = {}
         extra_body: dict[str, Any] = {}
         for key, value in kwargs.items():
-            if key in _OPENAI_CHAT_KNOWN_ARGS or key.startswith("extra_"):
+            if key == "extra_body":
+                if isinstance(value, dict):
+                    extra_body.update(copy.deepcopy(value))
+                else:
+                    known_kwargs[key] = value
+            elif key in _OPENAI_CHAT_KNOWN_ARGS or key.startswith("extra_"):
                 known_kwargs[key] = value
             else:
                 extra_body[key] = value
+        defaults = self._provider_extra_body_defaults()
+        if defaults:
+            extra_body = self._merge_extra_body_defaults(extra_body, defaults)
         if extra_body:
             known_kwargs["extra_body"] = extra_body
         return known_kwargs

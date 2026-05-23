@@ -59,6 +59,7 @@ def make_config(
     api_key: str = "",
     priorities: list[int] | None = None,
     model_routing: str = "any",
+    reasoning: bool = True,
 ) -> AppConfig:
     providers = []
     for index, backends_data in enumerate(groups):
@@ -97,6 +98,7 @@ def make_config(
     return AppConfig(
         keep_cycles=keep_cycles,
         model_routing=model_routing,
+        reasoning=reasoning,
         server=ServerConfig(api_key=api_key),
         providers=providers,
     )

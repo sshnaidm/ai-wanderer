@@ -114,6 +114,7 @@ class AppConfig(BaseModel):
     model_name: str = Field(default="aifree")
     show_provider: bool = Field(default=True)
     model_routing: str = Field(default="any")
+    reasoning: bool = True
     server: ServerConfig = Field(default_factory=ServerConfig)
     providers: list[PriorityGroup] = Field(min_length=1)
 

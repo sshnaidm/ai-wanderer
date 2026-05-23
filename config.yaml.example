@@ -8,6 +8,7 @@ keep_cycles: 1  # How many full cycles through all priorities before returning f
 model_name: "aifree"  # Name returned by /v1/models and used as the default model alias
 show_provider: true  # Include provider_name in API responses
 model_routing: "any"  # "any" = ignore client model, "match" = route by model name
+reasoning: true  # Global reasoning toggle for providers that require it, such as DeepSeek
 
 server:
   host: "0.0.0.0"
@@ -67,9 +68,16 @@ providers:
         api_key: "${ANTHROPIC_API_KEY}"
         model: "claude-sonnet-4-6"
 
+  # # Priority 6: DeepSeek has a built-in OpenAI-compatible base URL.
+  # - priority: 6
+  #   backends:
+  #     - provider: deepseek
+  #       api_key: "${DEEPSEEK_API_KEY}"
+  #       model: "deepseek-chat"
+
   # # Any OpenAI-compatible provider — just set base_url.
   # # The provider name can be anything (used for logging).
-  # - priority: 6
+  # - priority: 7
   #   backends:
   #     - provider: groq
   #       api_key: "${GROQ_API_KEY}"
