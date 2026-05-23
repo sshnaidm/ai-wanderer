@@ -1546,6 +1546,7 @@ class TestProviderRegistry:
 
         expected = {
             "anthropic",
+            "deepseek",
             "fake",
             "gemini",
             "grok",

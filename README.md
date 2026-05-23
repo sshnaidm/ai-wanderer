@@ -116,7 +116,7 @@ Sign up for free API keys from one or more providers:
 | MiniMax | <https://platform.minimax.io/user-center/payment/token-plan> |
 
 These are just examples -- any service with an OpenAI-compatible API works
-(DeepSeek, GLM, Groq, Together, local Ollama, etc.). See
+(GLM, Groq, Together, local Ollama, etc.). See
 [Custom OpenAI-Compatible Providers](#custom-openai-compatible-providers).
 
 ### 3. Configure
@@ -218,6 +218,7 @@ cp config.yaml.example config.yaml
 | `model_name` | `"aifree"` | The model name shown in `/v1/models`. Clients can use this name or any backend model name directly. |
 | `show_provider` | `true` | When `true`, responses include a `provider_name` field showing which provider handled the request. Set to `false` to hide this. |
 | `model_routing` | `"any"` | How to handle the model name from client requests. `"any"` (default) ignores the client model and uses all providers in priority order -- best for proxy use cases where clients send arbitrary model names. `"match"` routes to backends whose configured model matches the request, falling back to all providers if no match is found -- useful when you configure multiple distinct models and want clients to choose. |
+| `reasoning` | `true` | Global reasoning toggle for providers that require an explicit request flag. DeepSeek backends receive `extra_body.reasoning.enabled` with this value unless the client already supplied it. |
 
 ### Server Settings
 
@@ -323,7 +324,6 @@ backends:
   - provider: deepseek
     api_key: "${MY_DEEPSEEK_KEY}"
     model: "deepseek-chat"
-    base_url: "https://api.deepseek.com/v1"
 ```
 
 Then set the variables before starting:
@@ -386,12 +386,6 @@ whatever name you want for `provider` -- the name is just a label for logs:
 providers:
   - priority: 1
     backends:
-      # DeepSeek
-      - provider: deepseek
-        api_key: "${DEEPSEEK_KEY}"
-        model: "deepseek-chat"
-        base_url: "https://api.deepseek.com/v1"
-
       # GLM (Zhipu AI)
       - provider: glm
         api_key: "${GLM_KEY}"
@@ -490,6 +484,7 @@ These providers have built-in base URLs and work with just an API key:
 |----------|-----------------|-------------------|
 | Google Gemini | `gemini` | `gemini-2.5-flash`, `gemini-2.5-flash-lite` |
 | Alibaba Qwen | `qwen` | `qwen-flash` |
+| DeepSeek | `deepseek` | `deepseek-v4-flash`, `deepseek-v4-pro`, `deepseek-chat` |
 | OpenRouter | `openrouter` | `google/gemini-2.5-flash:free`, `meta-llama/llama-4-scout:free` |
 | xAI Grok | `grok` | `grok-3-mini` |
 | OpenAI | `openai` | `gpt-4o-mini`, `gpt-4o` |
@@ -497,7 +492,7 @@ These providers have built-in base URLs and work with just an API key:
 
 **Any other OpenAI-compatible service** works too -- just set `base_url`.
 See [Custom OpenAI-Compatible Providers](#custom-openai-compatible-providers)
-for examples with DeepSeek, GLM, Groq, Together, Ollama, LM Studio, and more.
+for examples with GLM, Groq, Together, Ollama, LM Studio, and more.
 
 ---
 

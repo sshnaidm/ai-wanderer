@@ -135,7 +135,6 @@ providers:
       - provider: deepseek
         api_key: "${DEEPSEEK_KEY}"
         model: "deepseek-chat"
-        base_url: "https://api.deepseek.com/v1"
 
   - priority: 2
     backends:

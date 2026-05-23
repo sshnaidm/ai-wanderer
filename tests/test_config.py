@@ -26,6 +26,7 @@ providers:
         )
         config = load_config(path)
         assert config.keep_cycles == 1
+        assert config.reasoning is True
         assert config.server.port == 8000
         assert len(config.providers) == 1
         assert config.providers[0].backends[0].provider == "gemini"
@@ -35,6 +36,7 @@ providers:
             tmp_path,
             """
 keep_cycles: 3
+reasoning: false
 server:
   host: "127.0.0.1"
   port: 9000
@@ -57,6 +59,7 @@ providers:
         )
         config = load_config(path)
         assert config.keep_cycles == 3
+        assert config.reasoning is False
         assert config.server.host == "127.0.0.1"
         assert config.server.port == 9000
         assert config.server.api_key == "my-secret"
@@ -193,6 +196,22 @@ providers:
         )
         with pytest.raises(ValueError, match="openai_compat provider requires base_url"):
             load_config(path)
+
+    def test_deepseek_builtin_does_not_require_base_url(self, tmp_path):
+        path = _write_yaml(
+            tmp_path,
+            """
+providers:
+  - priority: 1
+    backends:
+      - provider: deepseek
+        api_key: "key"
+        model: "deepseek-chat"
+""",
+        )
+        backend = load_config(path).providers[0].backends[0]
+        assert backend.provider == "deepseek"
+        assert backend.base_url is None
 
     def test_base_url_allowed_on_any_provider(self, tmp_path):
         path = _write_yaml(

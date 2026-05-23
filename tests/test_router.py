@@ -60,6 +60,14 @@ class TestRouterInit:
         assert backend.config.provider == "my_custom_llm"
         assert backend.config.base_url == "https://custom.example.com/v1"
 
+    def test_deepseek_is_builtin_provider_without_base_url(self):
+        router = Router(make_config([[{"provider": "deepseek", "model": "deepseek-chat"}]]))
+
+        backend = router.priority_groups[0][0]
+        assert isinstance(backend, OpenAICompatProvider)
+        assert backend.config.provider == "deepseek"
+        assert backend.config.base_url is None
+
     def test_custom_name_appears_in_label(self):
         router = Router(make_config([[{"name": "fast-gemini"}]]))
         backend = router.priority_groups[0][0]

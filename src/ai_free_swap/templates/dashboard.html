@@ -379,19 +379,6 @@
     const when = seconds => seconds ? new Date(seconds * 1000).toLocaleTimeString() : "-";
     const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 
-    function gcd(a, b) {
-      let x = Math.abs(Math.round(a || 0));
-      let y = Math.abs(Math.round(b || 0));
-      while (y) [x, y] = [y, x % y];
-      return x || 1;
-    }
-
-    function passFailRatio(passed, failed) {
-      if (!passed && !failed) return "0:0";
-      const divisor = gcd(passed, failed);
-      return `${num(passed / divisor)}:${num(failed / divisor)}`;
-    }
-
     function statusClass(status) {
       return ["healthy", "running", "failing", "limited", "idle"].includes(status) ? status : "idle";
     }
@@ -545,7 +532,7 @@
       document.getElementById("kActive").textContent = num(totals.active);
       document.getElementById("kTokens").textContent = num(totals.total_tokens);
       document.getElementById("kTokensHint").textContent = `${num(totals.prompt_tokens)} prompt | ${num(totals.completion_tokens)} output`;
-      document.getElementById("kPassFail").textContent = passFailRatio(passed, failed);
+      document.getElementById("kPassFail").textContent = `${num(passed)}:${num(failed)}`;
       document.getElementById("kPassed").textContent = `${num(passed)} passed`;
       document.getElementById("kFailed").textContent = `${num(failed)} failed`;
       document.getElementById("kPassedBar").style.width = `${passedWidth}%`;
