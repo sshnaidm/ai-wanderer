@@ -70,24 +70,39 @@ class TestProviderBaseUrls:
 
 
 class TestGeminiThoughtSignatureFallback:
-    def test_adds_skip_signature_to_first_missing_gemini_3_tool_call(self):
+    def test_adds_skip_signature_to_all_missing_gemini_3_tool_calls(self):
         messages = _tool_messages()
 
         normalized = _provider()._messages_for_provider(messages)
 
-        first_tool_call = normalized[1]["tool_calls"][0]
-        assert first_tool_call["extra_content"]["google"]["thought_signature"] == "skip_thought_signature_validator"
-        assert "extra_content" not in normalized[1]["tool_calls"][1]
+        for tool_call in normalized[1]["tool_calls"]:
+            assert tool_call["extra_content"]["google"]["thought_signature"] == "skip_thought_signature_validator"
         assert "extra_content" not in messages[1]["tool_calls"][0]
+        assert "extra_content" not in messages[1]["tool_calls"][1]
 
     def test_preserves_existing_google_thought_signature(self):
         messages = _tool_messages()
         messages[1]["tool_calls"][0]["extra_content"] = {"google": {"thought_signature": "sig_a"}}
+        messages[1]["tool_calls"][1]["extra_content"] = {"google": {"thought_signature": "sig_b"}}
 
         normalized = _provider()._messages_for_provider(messages)
 
         assert normalized is messages
         assert normalized[1]["tool_calls"][0]["extra_content"]["google"]["thought_signature"] == "sig_a"
+        assert normalized[1]["tool_calls"][1]["extra_content"]["google"]["thought_signature"] == "sig_b"
+
+    def test_patches_later_missing_tool_call_when_first_has_signature(self):
+        messages = _tool_messages()
+        messages[1]["tool_calls"][0]["extra_content"] = {"google": {"thought_signature": "sig_a"}}
+
+        normalized = _provider()._messages_for_provider(messages)
+
+        assert normalized is not messages
+        assert normalized[1]["tool_calls"][0]["extra_content"]["google"]["thought_signature"] == "sig_a"
+        assert (
+            normalized[1]["tool_calls"][1]["extra_content"]["google"]["thought_signature"]
+            == "skip_thought_signature_validator"
+        )
 
     def test_does_not_modify_non_gemini_3_models(self):
         messages = _tool_messages()

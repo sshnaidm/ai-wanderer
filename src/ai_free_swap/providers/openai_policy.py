@@ -176,26 +176,31 @@ def messages_for_provider(config: BackendConfig, messages: list[dict]) -> list[d
     changed = False
     for message in messages:
         tool_calls = message.get("tool_calls") if isinstance(message, dict) else None
-        if (
-            not isinstance(tool_calls, list)
-            or not tool_calls
-            or not isinstance(tool_calls[0], dict)
-            or _tool_call_has_google_thought_signature(tool_calls[0])
-        ):
+        if not isinstance(tool_calls, list) or not tool_calls:
+            normalized.append(message)
+            continue
+
+        missing_signature = [
+            index
+            for index, tool_call in enumerate(tool_calls)
+            if isinstance(tool_call, dict) and not _tool_call_has_google_thought_signature(tool_call)
+        ]
+        if not missing_signature:
             normalized.append(message)
             continue
 
         patched = copy.deepcopy(message)
-        first_tool_call = patched["tool_calls"][0]
-        extra_content = first_tool_call.setdefault("extra_content", {})
-        if not isinstance(extra_content, dict):
-            extra_content = {}
-            first_tool_call["extra_content"] = extra_content
-        google = extra_content.setdefault("google", {})
-        if not isinstance(google, dict):
-            google = {}
-            extra_content["google"] = google
-        google["thought_signature"] = GEMINI_THOUGHT_SIGNATURE_SKIP
+        for index in missing_signature:
+            tool_call = patched["tool_calls"][index]
+            extra_content = tool_call.setdefault("extra_content", {})
+            if not isinstance(extra_content, dict):
+                extra_content = {}
+                tool_call["extra_content"] = extra_content
+            google = extra_content.setdefault("google", {})
+            if not isinstance(google, dict):
+                google = {}
+                extra_content["google"] = google
+            google["thought_signature"] = GEMINI_THOUGHT_SIGNATURE_SKIP
         normalized.append(patched)
         changed = True
 
