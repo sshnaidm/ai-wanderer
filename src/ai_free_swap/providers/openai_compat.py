@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -46,6 +47,7 @@ _OPENAI_CHAT_KNOWN_ARGS = {
     "user",
     "web_search_options",
 }
+_GEMINI_THOUGHT_SIGNATURE_SKIP = "skip_thought_signature_validator"
 
 
 def _make_openai_provider(provider_name: str):
@@ -60,6 +62,62 @@ def _make_openai_provider(provider_name: str):
 
 class OpenAICompatProvider(BaseProvider):
     """Provider for any OpenAI-compatible API."""
+
+    def _needs_gemini_thought_signature_fallback(self) -> bool:
+        if self.config.extra.get("gemini_thought_signature_fallback") is False:
+            return False
+
+        model = self.config.model.lower().rsplit("/", 1)[-1]
+        if not model.startswith("gemini-3"):
+            return False
+
+        if self.config.provider == "gemini":
+            return True
+
+        base_url = (self.config.base_url or "").lower()
+        return "generativelanguage.googleapis.com" in base_url or "aiplatform.googleapis.com" in base_url
+
+    @staticmethod
+    def _tool_call_has_google_thought_signature(tool_call: dict[str, Any]) -> bool:
+        extra_content = tool_call.get("extra_content")
+        if isinstance(extra_content, dict):
+            google = extra_content.get("google")
+            if isinstance(google, dict) and google.get("thought_signature"):
+                return True
+        return bool(tool_call.get("thought_signature") or tool_call.get("thoughtSignature"))
+
+    def _messages_for_provider(self, messages: list[dict]) -> list[dict]:
+        if not self._needs_gemini_thought_signature_fallback():
+            return messages
+
+        normalized: list[dict] = []
+        changed = False
+        for message in messages:
+            tool_calls = message.get("tool_calls") if isinstance(message, dict) else None
+            if (
+                not isinstance(tool_calls, list)
+                or not tool_calls
+                or not isinstance(tool_calls[0], dict)
+                or self._tool_call_has_google_thought_signature(tool_calls[0])
+            ):
+                normalized.append(message)
+                continue
+
+            patched = copy.deepcopy(message)
+            first_tool_call = patched["tool_calls"][0]
+            extra_content = first_tool_call.setdefault("extra_content", {})
+            if not isinstance(extra_content, dict):
+                extra_content = {}
+                first_tool_call["extra_content"] = extra_content
+            google = extra_content.setdefault("google", {})
+            if not isinstance(google, dict):
+                google = {}
+                extra_content["google"] = google
+            google["thought_signature"] = _GEMINI_THOUGHT_SIGNATURE_SKIP
+            normalized.append(patched)
+            changed = True
+
+        return normalized if changed else messages
 
     def _client(self) -> AsyncOpenAI:
         base_url = self.config.base_url or PROVIDER_BASE_URLS.get(self.config.provider)
@@ -104,7 +162,7 @@ class OpenAICompatProvider(BaseProvider):
         client = self._client()
         resp = await client.chat.completions.create(
             model=self.config.model,
-            messages=messages,
+            messages=self._messages_for_provider(messages),
             stream=False,
             **self._split_kwargs(kwargs),
         )
@@ -128,7 +186,7 @@ class OpenAICompatProvider(BaseProvider):
         client = self._client()
         resp = await client.chat.completions.create(
             model=self.config.model,
-            messages=messages,
+            messages=self._messages_for_provider(messages),
             stream=True,
             **self._split_kwargs(kwargs),
         )

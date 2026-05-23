@@ -246,7 +246,12 @@ class Router:
             "completion_tokens": sum(item["completion_tokens"] for item in backends),
             "total_tokens": sum(item["total_tokens"] for item in backends),
         }
-        totals["success_rate"] = (totals["successes"] / totals["attempts"] * 100) if totals["attempts"] else None
+        if totals["attempts"]:
+            totals["success_rate"] = totals["successes"] / totals["attempts"] * 100
+            totals["failure_rate"] = totals["failures"] / totals["attempts"] * 100
+        else:
+            totals["success_rate"] = None
+            totals["failure_rate"] = None
         return {
             "generated_at": time.time(),
             "started_at": self._started_at,

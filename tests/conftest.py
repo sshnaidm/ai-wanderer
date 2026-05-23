@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from ai_free_swap.config import AppConfig, BackendConfig, PriorityGroup, RateLimits, ServerConfig
-from ai_free_swap.providers.base import BaseProvider, register_provider
+from ai_free_swap.providers.base import BaseProvider, ProviderResponse, register_provider
 
 import ai_free_swap.providers  # noqa: F401
 
@@ -20,6 +20,7 @@ class FakeProvider(BaseProvider):
         self.fail_error = config.extra.get("fail_error")
         self.stream_chunks = config.extra.get("stream_chunks")
         self.stream_fail_after_chunks = config.extra.get("stream_fail_after_chunks")
+        self.usage = config.extra.get("usage")
         self.delay = config.extra.get("delay", 0)
         self.invoke_calls: list[dict[str, Any]] = []
         self.stream_calls: list[dict[str, Any]] = []
@@ -30,6 +31,8 @@ class FakeProvider(BaseProvider):
             await asyncio.sleep(self.delay)
         if self.should_fail:
             raise self.fail_error or RuntimeError(f"{self.name} forced failure")
+        if self.usage:
+            return ProviderResponse(text=self.response, usage=self.usage)
         return self.response
 
     async def stream(self, messages: list[dict], **kwargs):
@@ -69,6 +72,7 @@ def make_config(
                 "fail_error",
                 "stream_chunks",
                 "stream_fail_after_chunks",
+                "usage",
                 "delay",
             ):
                 if key in backend_data:
