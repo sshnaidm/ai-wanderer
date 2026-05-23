@@ -92,7 +92,40 @@ class TestDashboard:
         assert data["totals"]["attempts"] == 1
         assert data["totals"]["successes"] == 1
         assert data["totals"]["success_rate"] == 100
+        assert data["totals"]["failure_rate"] == 0
         assert data["backends"][0]["status"] == "healthy"
+
+    @pytest.mark.asyncio
+    async def test_dashboard_data_totals_tokens_and_pass_fail_ratio(self):
+        app = create_app(
+            make_config(
+                [
+                    [{"model": "broken-model", "should_fail": True}],
+                    [
+                        {
+                            "model": "test-model",
+                            "response": "tracked",
+                            "usage": {"prompt_tokens": 7, "completion_tokens": 5, "total_tokens": 12},
+                        }
+                    ],
+                ]
+            )
+        )
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            completion = await ac.post("/v1/chat/completions", json=_chat_payload())
+            response = await ac.get("/dashboard/data")
+
+        assert completion.status_code == 200
+        data = response.json()
+        assert data["totals"]["attempts"] == 2
+        assert data["totals"]["successes"] == 1
+        assert data["totals"]["failures"] == 1
+        assert data["totals"]["success_rate"] == 50
+        assert data["totals"]["failure_rate"] == 50
+        assert data["totals"]["prompt_tokens"] == 7
+        assert data["totals"]["completion_tokens"] == 5
+        assert data["totals"]["total_tokens"] == 12
 
     @pytest.mark.asyncio
     async def test_dashboard_data_marks_rate_limited_backend(self):
