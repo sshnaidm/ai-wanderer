@@ -218,7 +218,7 @@ cp config.yaml.example config.yaml
 | `model_name` | `"aifree"` | The model name shown in `/v1/models`. Clients can use this name or any backend model name directly. |
 | `show_provider` | `true` | When `true`, responses include a `provider_name` field showing which provider handled the request. Set to `false` to hide this. |
 | `model_routing` | `"any"` | How to handle the model name from client requests. `"any"` (default) ignores the client model and uses all providers in priority order -- best for proxy use cases where clients send arbitrary model names. `"match"` routes to backends whose configured model matches the request, falling back to all providers if no match is found -- useful when you configure multiple distinct models and want clients to choose. |
-| `reasoning` | `true` | Global reasoning toggle for providers that require an explicit request flag. DeepSeek backends receive `extra_body.reasoning.enabled` with this value unless the client already supplied it. |
+| `reasoning` | `true` | Optional global reasoning toggle for providers that require an explicit request flag. DeepSeek backends always receive `extra_body.reasoning.enabled`; omit this setting to use `true`, or set it to `false` only when a DeepSeek model requires reasoning disabled. |
 
 ### Server Settings
 
@@ -259,7 +259,24 @@ Each backend supports these fields:
 | `name` | No | Friendly name for this backend. Shown in logs and in the `provider_name` response field. |
 | `base_url` | No | Override the provider's API URL. Required for custom/self-hosted providers. |
 | `limits` | No | Per-backend request/token limits. See [Rate Limits](#rate-limits). |
+| `reasoning` | No | Override the global `reasoning` setting for this backend. Used by providers/models that require an explicit reasoning flag, such as DeepSeek. |
 | `extra` | No | Provider-specific options (e.g., `timeout`, `default_max_tokens`). |
+
+For OpenAI-compatible providers, `extra` can also define request defaults:
+
+```yaml
+extra:
+  request_kwargs_defaults:
+    temperature: 0.2
+  extra_body_defaults:
+    reasoning:
+      enabled: true
+```
+
+`request_kwargs_defaults` applies defaults for supported OpenAI chat request
+arguments. `extra_body_defaults` is deep-merged into the provider-specific
+`extra_body`. Client requests still win when they explicitly set the same
+field.
 
 ### Rate Limits
 
@@ -484,6 +501,7 @@ These providers have built-in base URLs and work with just an API key:
 |----------|-----------------|-------------------|
 | Google Gemini | `gemini` | `gemini-2.5-flash`, `gemini-2.5-flash-lite` |
 | Alibaba Qwen | `qwen` | `qwen-flash` |
+| Alibaba Qwen China | `qwen-cn` | `qwen-flash` |
 | DeepSeek | `deepseek` | `deepseek-v4-flash`, `deepseek-v4-pro`, `deepseek-chat` |
 | OpenRouter | `openrouter` | `google/gemini-2.5-flash:free`, `meta-llama/llama-4-scout:free` |
 | xAI Grok | `grok` | `grok-3-mini` |

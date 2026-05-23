@@ -1554,5 +1554,6 @@ class TestProviderRegistry:
             "openai_compat",
             "openrouter",
             "qwen",
+            "qwen-cn",
         }
         assert expected.issubset(set(PROVIDER_REGISTRY))
