@@ -147,8 +147,10 @@ providers:
 Then set `MY_GEMINI_KEY`, `DEEPSEEK_KEY`, and `GLM_KEY` as environment
 variables in your hosting platform. The names are entirely up to you.
 
-Any service with an OpenAI-compatible API works -- just set `base_url`.
-The `provider` field is just a label for your own reference in logs.
+Built-in providers such as `gemini`, `deepseek`, `qwen`, `qwen-cn`,
+`openrouter`, and `grok` do not need `base_url`. For other OpenAI-compatible
+services, set `base_url`; the `provider` field is then just a label for your own
+reference in logs.
 
 ---
 
