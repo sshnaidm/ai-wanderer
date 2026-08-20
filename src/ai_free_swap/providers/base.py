@@ -5,7 +5,7 @@ from typing import Any
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
 
-from ..config import BackendConfig
+from ..config import BackendCapabilities, BackendConfig
 
 PROVIDER_REGISTRY: dict[str, type[BaseProvider]] = {}
 
@@ -37,6 +37,16 @@ class BaseProvider(ABC):
     @abstractmethod
     async def stream(self, messages: list[dict], **kwargs) -> AsyncGenerator[str | dict[str, Any], None]:
         """Yield text chunks or raw provider stream payloads."""
+
+    @property
+    def capabilities(self) -> BackendCapabilities | None:
+        return self.config.capabilities
+
+    @property
+    def capabilities_dict(self) -> dict[str, Any]:
+        if self.capabilities is None:
+            return {}
+        return self.capabilities.model_dump(exclude_none=True)
 
     @property
     def name(self) -> str:

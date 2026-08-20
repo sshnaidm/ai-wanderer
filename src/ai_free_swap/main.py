@@ -50,7 +50,9 @@ def main():
     host = args.host or config.server.host
     port = args.port or config.server.port
 
-    state_file = str(Path(args.config).parent / ".rate_limit_state.json")
+    state_file = None
+    if config.state_store.type == "local":
+        state_file = str(Path(args.config).parent / ".rate_limit_state.json")
     app = create_app(config, state_file=state_file)
     uvicorn.run(app, host=host, port=port, log_level=args.log_level)
 

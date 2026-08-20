@@ -2,8 +2,10 @@ from ai_free_swap.models import (
     ChatCompletionRequest,
     ChatMessage,
     ResponsesRequest,
+    make_anthropic_response,
     make_completion_response,
     make_error_response,
+    make_responses_response,
     make_stream_chunk,
     message_to_response_output,
 )
@@ -38,6 +40,36 @@ class TestMakeCompletionResponse:
         )
         assert resp.choices[0].message.content == [{"type": "text", "text": "Hello"}]
         assert resp.choices[0].message.tool_calls == [{"id": "call-1", "type": "function"}]
+
+    def test_propagates_usage_when_available(self):
+        resp = make_completion_response(
+            "Hello",
+            "test-model",
+            usage={"prompt_tokens": 7, "completion_tokens": 5, "total_tokens": 12},
+        )
+        assert resp.usage.prompt_tokens == 7
+        assert resp.usage.completion_tokens == 5
+        assert resp.usage.total_tokens == 12
+
+
+class TestOtherResponseBuilders:
+    def test_responses_builder_propagates_usage(self):
+        resp = make_responses_response(
+            "Hello",
+            "test-model",
+            "resp_123",
+            usage={"input_tokens": 11, "output_tokens": 4, "total_tokens": 15},
+        )
+        assert resp["usage"] == {"input_tokens": 11, "output_tokens": 4, "total_tokens": 15}
+
+    def test_anthropic_builder_propagates_usage(self):
+        resp = make_anthropic_response(
+            "Hello",
+            "test-model",
+            "msg_123",
+            usage={"prompt_tokens": 9, "completion_tokens": 3, "total_tokens": 12},
+        )
+        assert resp["usage"] == {"input_tokens": 9, "output_tokens": 3}
 
 
 class TestMakeStreamChunk:

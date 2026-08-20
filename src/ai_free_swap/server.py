@@ -27,7 +27,6 @@ from .models import (
 )
 from .router import (
     AllProvidersFailedError,
-    NoMatchingProvidersError,
     PreparedStream,
     Router,
     StreamingProviderError,
@@ -52,8 +51,113 @@ def create_app(config: AppConfig, *, state_file: str | None = None) -> FastAPI:
 
     app = FastAPI(title="ai-free-swap", lifespan=lifespan)
     server_api_key = config.server.api_key
-    model_name = config.model_name
     show_provider = config.show_provider
+
+    def _with_provider_name(payload: dict[str, Any], provider_name: str) -> dict[str, Any]:
+        if not show_provider:
+            return payload
+        return {**payload, "provider_name": provider_name}
+
+    def _openai_failure_response(
+        request_id: str, error: AllProvidersFailedError, *, before_stream: bool
+    ) -> JSONResponse:
+        if before_stream:
+            logger.warning("[%s] All providers failed before stream start", request_id)
+        else:
+            logger.warning("[%s] All providers failed", request_id)
+        logger.debug("[%s] Provider failure details: %s", request_id, error.detail_summary)
+        return _error_response(
+            503,
+            "All configured providers failed",
+            "server_error",
+            code="all_providers_failed",
+        )
+
+    def _anthropic_failure_response(
+        request_id: str,
+        error: AllProvidersFailedError,
+        *,
+        before_stream: bool,
+    ) -> JSONResponse:
+        if before_stream:
+            logger.warning("[%s] All providers failed before stream start", request_id)
+        else:
+            logger.warning("[%s] All providers failed", request_id)
+        logger.debug("[%s] Provider failure details: %s", request_id, error.detail_summary)
+        return _anthropic_error_response(
+            529,
+            "All configured providers failed",
+            "overloaded_error",
+        )
+
+    async def _prepare_stream_or_error(
+        messages: list[dict[str, Any]],
+        *,
+        requested_model: str,
+        request_id: str,
+        failure_response,
+        **kwargs: Any,
+    ) -> PreparedStream | JSONResponse:
+        try:
+            return await router.prepare_stream(
+                messages,
+                requested_model=requested_model,
+                request_id=request_id,
+                **kwargs,
+            )
+        except AllProvidersFailedError as e:
+            return failure_response(request_id, e, before_stream=True)
+
+    async def _route_or_error(
+        messages: list[dict[str, Any]],
+        *,
+        requested_model: str,
+        request_id: str,
+        failure_response,
+        **kwargs: Any,
+    ):
+        try:
+            return await router.route(
+                messages,
+                requested_model=requested_model,
+                request_id=request_id,
+                **kwargs,
+            )
+        except AllProvidersFailedError as e:
+            return failure_response(request_id, e, before_stream=False)
+
+    def _chat_response_payload(result) -> dict[str, Any]:
+        if result.raw_response is not None:
+            return _with_provider_name(dict(result.raw_response), result.display_name)
+        resp = make_completion_response(
+            result.content,
+            result.model,
+            message=result.message,
+            usage=result.usage,
+        )
+        return _with_provider_name(resp.model_dump(), result.display_name)
+
+    def _responses_payload(result) -> dict[str, Any]:
+        response_id = f"resp_{uuid.uuid4().hex[:24]}"
+        resp = make_responses_response(
+            result.content,
+            result.model,
+            response_id,
+            message=result.message,
+            usage=result.usage,
+        )
+        return _with_provider_name(resp, result.display_name)
+
+    def _anthropic_payload(result) -> dict[str, Any]:
+        msg_id = f"msg_{uuid.uuid4().hex[:24]}"
+        resp = make_anthropic_response(
+            result.content,
+            result.model,
+            msg_id,
+            message=result.message,
+            usage=result.usage,
+        )
+        return _with_provider_name(resp, result.display_name)
 
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
@@ -80,61 +184,26 @@ def create_app(config: AppConfig, *, state_file: str | None = None) -> FastAPI:
         kwargs = request.to_model_kwargs()
 
         if request.stream:
-            try:
-                prepared_stream = await router.prepare_stream(
-                    messages,
-                    requested_model=request.model,
-                    request_id=request_id,
-                    **kwargs,
-                )
-            except NoMatchingProvidersError as e:
-                return _error_response(
-                    400,
-                    f"Model {e.requested_model!r} is not configured",
-                    "invalid_request_error",
-                    code="model_not_found",
-                )
-            except AllProvidersFailedError as e:
-                logger.warning("[%s] All providers failed before stream start", request_id)
-                logger.debug("[%s] Provider failure details: %s", request_id, e.detail_summary)
-                return _error_response(
-                    503,
-                    "All configured providers failed",
-                    "server_error",
-                    code="all_providers_failed",
-                )
-
-            return EventSourceResponse(_stream_response(prepared_stream, show_provider))
-
-        try:
-            result = await router.route(
+            prepared_stream = await _prepare_stream_or_error(
                 messages,
                 requested_model=request.model,
                 request_id=request_id,
+                failure_response=_openai_failure_response,
                 **kwargs,
             )
-        except NoMatchingProvidersError as e:
-            return _error_response(
-                400,
-                f"Model {e.requested_model!r} is not configured",
-                "invalid_request_error",
-                code="model_not_found",
-            )
-        except AllProvidersFailedError as e:
-            logger.warning("[%s] All providers failed", request_id)
-            logger.debug("[%s] Provider failure details: %s", request_id, e.detail_summary)
-            return _error_response(
-                503,
-                "All configured providers failed",
-                "server_error",
-                code="all_providers_failed",
-            )
+            if isinstance(prepared_stream, JSONResponse):
+                return prepared_stream
+            return EventSourceResponse(_stream_response(prepared_stream, show_provider))
 
-        if result.raw_response is not None:
-            raw = result.raw_response
-            if show_provider:
-                raw = {**raw, "provider_name": result.display_name}
-            return raw
+        result = await _route_or_error(
+            messages,
+            requested_model=request.model,
+            request_id=request_id,
+            failure_response=_openai_failure_response,
+            **kwargs,
+        )
+        if isinstance(result, JSONResponse):
+            return result
 
         logger.debug(
             "[%s] Response from %s: %s",
@@ -142,14 +211,7 @@ def create_app(config: AppConfig, *, state_file: str | None = None) -> FastAPI:
             result.provider_name,
             result.content[:200],
         )
-        resp = make_completion_response(
-            result.content,
-            result.model,
-            message=result.message,
-        )
-        if show_provider:
-            return {**resp.model_dump(), "provider_name": result.display_name}
-        return resp
+        return _chat_response_payload(result)
 
     @app.post("/v1/responses")
     async def responses(request: ResponsesRequest):
@@ -164,66 +226,27 @@ def create_app(config: AppConfig, *, state_file: str | None = None) -> FastAPI:
         kwargs = request.to_model_kwargs()
 
         if request.stream:
-            try:
-                prepared_stream = await router.prepare_stream(
-                    messages,
-                    requested_model=request.model,
-                    request_id=request_id,
-                    **kwargs,
-                )
-            except NoMatchingProvidersError as e:
-                return _error_response(
-                    400,
-                    f"Model {e.requested_model!r} is not configured",
-                    "invalid_request_error",
-                    code="model_not_found",
-                )
-            except AllProvidersFailedError as e:
-                logger.warning("[%s] All providers failed before stream start", request_id)
-                logger.debug("[%s] Provider failure details: %s", request_id, e.detail_summary)
-                return _error_response(
-                    503,
-                    "All configured providers failed",
-                    "server_error",
-                    code="all_providers_failed",
-                )
-
-            return EventSourceResponse(_responses_stream(prepared_stream, show_provider))
-
-        try:
-            result = await router.route(
+            prepared_stream = await _prepare_stream_or_error(
                 messages,
                 requested_model=request.model,
                 request_id=request_id,
+                failure_response=_openai_failure_response,
                 **kwargs,
             )
-        except NoMatchingProvidersError as e:
-            return _error_response(
-                400,
-                f"Model {e.requested_model!r} is not configured",
-                "invalid_request_error",
-                code="model_not_found",
-            )
-        except AllProvidersFailedError as e:
-            logger.warning("[%s] All providers failed", request_id)
-            logger.debug("[%s] Provider failure details: %s", request_id, e.detail_summary)
-            return _error_response(
-                503,
-                "All configured providers failed",
-                "server_error",
-                code="all_providers_failed",
-            )
+            if isinstance(prepared_stream, JSONResponse):
+                return prepared_stream
+            return EventSourceResponse(_responses_stream(prepared_stream, show_provider))
 
-        response_id = f"resp_{uuid.uuid4().hex[:24]}"
-        resp = make_responses_response(
-            result.content,
-            result.model,
-            response_id,
-            message=result.message,
+        result = await _route_or_error(
+            messages,
+            requested_model=request.model,
+            request_id=request_id,
+            failure_response=_openai_failure_response,
+            **kwargs,
         )
-        if show_provider:
-            resp["provider_name"] = result.display_name
-        return resp
+        if isinstance(result, JSONResponse):
+            return result
+        return _responses_payload(result)
 
     @app.post("/v1/messages")
     async def anthropic_messages(request: AnthropicMessagesRequest):
@@ -238,68 +261,33 @@ def create_app(config: AppConfig, *, state_file: str | None = None) -> FastAPI:
         kwargs = request.to_model_kwargs()
 
         if request.stream:
-            try:
-                prepared_stream = await router.prepare_stream(
-                    messages,
-                    requested_model=request.model,
-                    request_id=request_id,
-                    **kwargs,
-                )
-            except NoMatchingProvidersError as e:
-                return _anthropic_error_response(
-                    400,
-                    f"Model {e.requested_model!r} is not configured",
-                    "not_found_error",
-                )
-            except AllProvidersFailedError as e:
-                logger.warning("[%s] All providers failed before stream start", request_id)
-                logger.debug("[%s] Provider failure details: %s", request_id, e.detail_summary)
-                return _anthropic_error_response(
-                    529,
-                    "All configured providers failed",
-                    "overloaded_error",
-                )
-
-            return EventSourceResponse(_anthropic_stream_response(prepared_stream, show_provider))
-
-        try:
-            result = await router.route(
+            prepared_stream = await _prepare_stream_or_error(
                 messages,
                 requested_model=request.model,
                 request_id=request_id,
+                failure_response=_anthropic_failure_response,
                 **kwargs,
             )
-        except NoMatchingProvidersError as e:
-            return _anthropic_error_response(
-                400,
-                f"Model {e.requested_model!r} is not configured",
-                "not_found_error",
-            )
-        except AllProvidersFailedError as e:
-            logger.warning("[%s] All providers failed", request_id)
-            logger.debug("[%s] Provider failure details: %s", request_id, e.detail_summary)
-            return _anthropic_error_response(
-                529,
-                "All configured providers failed",
-                "overloaded_error",
-            )
+            if isinstance(prepared_stream, JSONResponse):
+                return prepared_stream
+            return EventSourceResponse(_anthropic_stream_response(prepared_stream, show_provider))
 
-        msg_id = f"msg_{uuid.uuid4().hex[:24]}"
-        resp = make_anthropic_response(
-            result.content,
-            result.model,
-            msg_id,
-            message=result.message,
+        result = await _route_or_error(
+            messages,
+            requested_model=request.model,
+            request_id=request_id,
+            failure_response=_anthropic_failure_response,
+            **kwargs,
         )
-        if show_provider:
-            resp["provider_name"] = result.display_name
-        return resp
+        if isinstance(result, JSONResponse):
+            return result
+        return _anthropic_payload(result)
 
     @app.get("/v1/models")
     async def list_models():
         return {
             "object": "list",
-            "data": [{"id": model_name, "object": "model", "owned_by": "ai-free-swap"}],
+            "data": [{"id": config.model_name, "object": "model", "owned_by": "ai-free-swap"}],
         }
 
     @app.get("/dashboard", response_class=HTMLResponse)
@@ -455,8 +443,11 @@ async def _responses_stream(
 
     full_text: list[str] = []
     status = "completed"
+    usage: dict[str, int] | None = None
     try:
         async for chunk in prepared_stream.chunks:
+            if isinstance(chunk, dict) and chunk.get("usage"):
+                usage = chunk["usage"]
             text = _extract_stream_text(chunk)
             if not text:
                 continue
@@ -514,6 +505,7 @@ async def _responses_stream(
         prepared_stream.model,
         response_id,
         status=status,
+        usage=usage,
     )
     if show_provider:
         final_resp["provider_name"] = prepared_stream.display_name
@@ -538,6 +530,7 @@ async def _anthropic_stream_response(
 ) -> AsyncGenerator[dict[str, str], None]:
     msg_id = f"msg_{uuid.uuid4().hex[:24]}"
     provider_fields = {"provider_name": prepared_stream.display_name} if show_provider else {}
+    usage: dict[str, int] | None = None
 
     message_obj = {
         "id": msg_id,
@@ -564,6 +557,8 @@ async def _anthropic_stream_response(
 
     try:
         async for chunk in prepared_stream.chunks:
+            if isinstance(chunk, dict) and chunk.get("usage"):
+                usage = chunk["usage"]
             text, tool_calls = _extract_stream_parts(chunk)
 
             if text and not text_block_closed:
@@ -695,7 +690,12 @@ async def _anthropic_stream_response(
             {
                 "type": "message_delta",
                 "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-                "usage": {"output_tokens": 0},
+                "usage": {
+                    "output_tokens": (usage or {}).get(
+                        "completion_tokens",
+                        (usage or {}).get("output_tokens", 0),
+                    )
+                },
             }
         ),
     }

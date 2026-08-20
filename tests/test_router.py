@@ -120,6 +120,20 @@ class TestRouterInit:
         key2 = next(router2._rate_key(b) for b in router2.priority_groups[0] if b.config.api_key == "key-a")
         assert key1 == key2
 
+    def test_provider_exposes_capabilities_metadata(self):
+        router = Router(
+            make_config([[{"capabilities": {"supports_tools": True, "max_context_tokens": 8192, "tags": ["local"]}}]])
+        )
+        backend = router.priority_groups[0][0]
+        assert backend.capabilities is not None
+        assert backend.capabilities.supports_tools is True
+        assert backend.capabilities.max_context_tokens == 8192
+        assert backend.capabilities_dict == {
+            "supports_tools": True,
+            "max_context_tokens": 8192,
+            "tags": ["local"],
+        }
+
 
 class TestRouterRoute:
     @pytest.mark.asyncio

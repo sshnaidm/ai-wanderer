@@ -9,6 +9,11 @@ unauthorized access to your proxy (and your provider API keys behind it).
 Clients can authenticate using either `Authorization: Bearer <key>` (OpenAI
 style) or `x-api-key: <key>` (Anthropic style).
 
+For a single-user or single-instance deployment, the default local
+`.rate_limit_state.json` persistence is enough. You only need a shared state
+backend such as Redis when multiple app instances or multiple users must share
+the same quota counters.
+
 ---
 
 ## Table of Contents
@@ -158,6 +163,21 @@ reference in logs.
 
 The Docker image ships with a minimal default config. To use a full custom
 config, you have two options:
+
+If you deploy more than one instance and want shared rate-limit counters, add:
+
+```yaml
+state_store:
+  type: "redis"
+  redis_url: "${REDIS_URL}"
+  redis_prefix: "ai_free_swap"
+```
+
+Install the optional Redis dependency in your image or environment first:
+
+```bash
+pip install ".[redis]"
+```
 
 ### Option 1: Mount a config file
 

@@ -215,9 +215,9 @@ cp config.yaml.example config.yaml
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `keep_cycles` | `1` | How many times to cycle through all providers before giving up. Set to `2` or `3` if providers have intermittent failures. |
-| `model_name` | `"aifree"` | The model name shown in `/v1/models`. Clients can use this name or any backend model name directly. |
+| `model_name` | `"aifree"` | The single public alias model shown in `/v1/models`. Clients should generally use this name; other model strings are treated as routing hints, not a strict model catalog. |
 | `show_provider` | `true` | When `true`, responses include a `provider_name` field showing which provider handled the request. Set to `false` to hide this. |
-| `model_routing` | `"any"` | How to handle the model name from client requests. `"any"` (default) ignores the client model and uses all providers in priority order -- best for proxy use cases where clients send arbitrary model names. `"match"` routes to backends whose configured model matches the request, falling back to all providers if no match is found -- useful when you configure multiple distinct models and want clients to choose. |
+| `model_routing` | `"any"` | How to treat the client-provided model string. `"any"` (default) ignores it and uses all providers in priority order -- ideal when the proxy exposes a single alias model. `"match"` first looks for configured backend models with the same name, but still falls back to all providers if no match is found. |
 | `reasoning` | `true` | Optional global reasoning toggle for providers that require an explicit request flag. DeepSeek backends receive `extra_body.reasoning.enabled` automatically; omit this setting to use `true`, or set it to `false` when you need reasoning disabled by default. Backend `reasoning`, backend `extra_body_defaults`, and client request `extra_body` can override this value. |
 
 ### Server Settings
@@ -259,6 +259,7 @@ Each backend supports these fields:
 | `name` | No | Friendly name for this backend. Shown in logs and in the `provider_name` response field. |
 | `base_url` | No | Override the provider's API URL. Required for custom/self-hosted providers. |
 | `limits` | No | Per-backend request/token limits. See [Rate Limits](#rate-limits). |
+| `capabilities` | No | Optional descriptive metadata about what this backend supports. This does not affect routing yet. |
 | `reasoning` | No | Override the global `reasoning` setting for this backend. Used by providers/models that require an explicit reasoning flag, such as DeepSeek. |
 | `extra` | No | Provider-specific options (e.g., `timeout`, `default_max_tokens`). |
 
@@ -278,6 +279,42 @@ arguments. `extra_body_defaults` is deep-merged into the provider-specific
 `extra_body`. Built-in provider defaults are applied first, backend defaults can
 override those defaults, and client requests still win when they explicitly set
 the same field.
+
+### Backend Capabilities Metadata
+
+You can attach optional descriptive metadata to any backend:
+
+```yaml
+backends:
+  - provider: gemini
+    api_key: "${GEMINI_API_KEY}"
+    model: "gemini-2.5-flash"
+    capabilities:
+      supports_tools: true
+      supports_vision: true
+      supports_reasoning: false
+      supports_streaming: true
+      max_context_tokens: 1048576
+      max_output_tokens: 8192
+      tags: ["cloud", "fast"]
+```
+
+Supported fields:
+
+| Field | Meaning |
+|-------|---------|
+| `supports_tools` | Backend is expected to handle tool/function calling. |
+| `supports_vision` | Backend is expected to accept image input. |
+| `supports_reasoning` | Backend is expected to support explicit reasoning behavior. |
+| `supports_streaming` | Backend is expected to support streaming responses. |
+| `max_context_tokens` | Approximate maximum prompt + context window, when known. |
+| `max_output_tokens` | Approximate maximum output length, when known. |
+| `tags` | Free-form labels such as `local`, `cloud`, `fast`, or `cheap`. |
+
+This metadata is only recorded and exposed for observability today. It does not
+change backend selection yet, but it gives future routing policies a clean
+place to reason about backend capabilities without hardcoding provider names or
+model substrings.
 
 ### Rate Limits
 
@@ -322,6 +359,28 @@ token limits may not advance for those calls.
 Rate-limit counters use UTC minute/hour/day windows and are persisted in
 `.rate_limit_state.json` next to your config file. The file is saved
 periodically and on shutdown, and it is ignored by git.
+
+For single-user or single-instance deployments, the local file-based state is
+the default and recommended setup.
+
+If you run multiple app instances or share one proxy across multiple users, you
+can switch to an optional Redis-backed shared state store:
+
+```yaml
+state_store:
+  type: "redis"
+  redis_url: "${REDIS_URL}"
+  redis_prefix: "ai_free_swap"
+```
+
+Install the optional Redis dependency first:
+
+```bash
+pip install -e ".[redis]"
+```
+
+Redis is only needed when counters must be coordinated across processes or
+machines. Personal local deployments do not need it.
 
 ### Environment Variables for API Keys
 
@@ -444,7 +503,7 @@ providers:
 keep_cycles: 1
 model_name: "aifree"
 show_provider: true
-model_routing: "any"  # "any" = ignore client model, "match" = route by model name
+model_routing: "any"  # "any" = ignore client model, "match" = try matching first, then fall back to any provider
 
 server:
   host: "0.0.0.0"
@@ -627,7 +686,7 @@ ai-free-swap works as a drop-in replacement for the OpenAI API. In most tools,
 you just need to change two settings:
 
 - **API Base URL:** `http://localhost:8000/v1`
-- **Model:** `aifree` (or any backend model name you configured)
+- **Model:** `aifree`
 
 This works with tools like aider, cline, open-hands, continue, LangChain,
 LlamaIndex, Open Interpreter, and any other application that supports custom
@@ -757,9 +816,12 @@ If configured rate limits are exhausted, the proxy skips those backends until
 the current UTC minute/hour/day window rolls over. Check `/dashboard` for
 `limited` status and rate-limit skip counts.
 
-**"Model 'xyz' is not configured" (400)** -- The model name in your request
-doesn't match any configured backend. Use `"aifree"` to use any available
-provider, or check your config for the exact model names.
+**Unexpected model routing behavior** -- This proxy exposes a single public
+alias model from `/v1/models` (default: `"aifree"`). With the default
+`model_routing: "any"`, arbitrary model strings are ignored and the proxy tries
+all configured providers in priority order. With `model_routing: "match"`, the
+proxy tries matching backend models first, then still falls back to all
+providers if none match.
 
 **Server not reachable** -- Check the port isn't already in use. In Docker,
 make sure you used `-p 8000:8000`. If `host` is `127.0.0.1`, the server only

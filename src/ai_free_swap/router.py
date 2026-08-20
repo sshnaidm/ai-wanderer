@@ -73,6 +73,7 @@ class BackendMetrics:
     name: str
     priority: int
     limits: dict[str, int | None]
+    capabilities: dict[str, Any]
     active: int = 0
     attempts: int = 0
     successes: int = 0
@@ -88,6 +89,37 @@ class BackendMetrics:
     last_success_at: float | None = None
     last_failure_at: float | None = None
     last_error: str = ""
+
+    @staticmethod
+    def _window_count(counter_values: dict[str, int], key_length: int) -> int:
+        for key, value in counter_values.items():
+            if len(key) == key_length:
+                return value
+        return 0
+
+    def _rate_window_usage(self, rate_counters: dict[str, dict[str, int]]) -> dict[str, dict[str, int | None]]:
+        requests = rate_counters.get("requests", {})
+        tokens = rate_counters.get("tokens", {})
+        return {
+            "minute": {
+                "requests": self._window_count(requests, 13),
+                "request_limit": self.limits.get("rpm"),
+                "tokens": self._window_count(tokens, 13),
+                "token_limit": self.limits.get("tpm"),
+            },
+            "hour": {
+                "requests": self._window_count(requests, 11),
+                "request_limit": self.limits.get("rph"),
+                "tokens": self._window_count(tokens, 11),
+                "token_limit": self.limits.get("tph"),
+            },
+            "day": {
+                "requests": self._window_count(requests, 8),
+                "request_limit": self.limits.get("rpd"),
+                "tokens": self._window_count(tokens, 8),
+                "token_limit": self.limits.get("tpd"),
+            },
+        }
 
     def as_dict(
         self,
@@ -105,7 +137,9 @@ class BackendMetrics:
         elif self.last_error and (not self.last_success_at or (self.last_failure_at or 0) >= self.last_success_at):
             status = "failing"
         elif self.successes:
-            status = "healthy"
+            status = "degraded" if self.failures and success_rate is not None and success_rate < 95 else "healthy"
+        health_tier = status
+        normalized_rate_counters = rate_counters or {}
         return {
             "key": self.key,
             "label": self.label,
@@ -114,7 +148,9 @@ class BackendMetrics:
             "name": self.name,
             "priority": self.priority,
             "limits": self.limits,
+            "capabilities": self.capabilities,
             "status": status,
+            "health_tier": health_tier,
             "rate_limited": rate_limited,
             "active": self.active,
             "attempts": self.attempts,
@@ -132,7 +168,8 @@ class BackendMetrics:
             "last_success_at": self.last_success_at,
             "last_failure_at": self.last_failure_at,
             "last_error": self.last_error,
-            "rate_counters": rate_counters or {},
+            "rate_counters": normalized_rate_counters,
+            "rate_windows": self._rate_window_usage(normalized_rate_counters),
         }
 
 
@@ -203,10 +240,14 @@ class Router:
                     name=backend.config.name or "",
                     priority=backend_priorities[id(backend)],
                     limits=backend.config.limits.model_dump() if backend.config.limits else {},
+                    capabilities=backend.capabilities_dict,
                 )
 
         has_limits = bool(self._backend_limits)
-        self._rate_limiter = RateLimiter(state_file=state_file if has_limits else None)
+        self._rate_limiter = RateLimiter(
+            state_file=state_file if has_limits and config.state_store.type == "local" else None,
+            state_store=config.state_store,
+        )
 
         logger.info(
             "Router initialized with %d priority groups, %d total backends",
@@ -260,6 +301,7 @@ class Router:
             "model_name": self.model_name,
             "model_routing": self.model_routing,
             "keep_cycles": self.keep_cycles,
+            "state_store": self._rate_limiter.store_type,
             "totals": totals,
             "backends": backends,
         }

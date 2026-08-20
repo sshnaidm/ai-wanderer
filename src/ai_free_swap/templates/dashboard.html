@@ -163,8 +163,10 @@
       overflow: hidden;
       background: var(--panel-soft);
     }
-    .priority-group.group-strong { border-color: color-mix(in srgb, var(--green) 45%, var(--line)); }
-    .priority-group.group-warning { border-color: color-mix(in srgb, var(--amber) 45%, var(--line)); }
+    .priority-group.group-strong,
+    .priority-group.group-healthy { border-color: color-mix(in srgb, var(--green) 45%, var(--line)); }
+    .priority-group.group-warning,
+    .priority-group.group-degraded { border-color: color-mix(in srgb, var(--amber) 45%, var(--line)); }
     .priority-group.group-poor,
     .priority-group.group-failing { border-color: color-mix(in srgb, var(--red) 55%, var(--line)); }
     .priority-group.group-running { border-color: color-mix(in srgb, var(--blue) 45%, var(--line)); }
@@ -177,8 +179,10 @@
       border-left: 4px solid var(--blue);
       background: var(--panel);
     }
-    .priority-group.group-strong .priority-head { border-left-color: var(--green); }
-    .priority-group.group-warning .priority-head { border-left-color: var(--amber); }
+    .priority-group.group-strong .priority-head,
+    .priority-group.group-healthy .priority-head { border-left-color: var(--green); }
+    .priority-group.group-warning .priority-head,
+    .priority-group.group-degraded .priority-head { border-left-color: var(--amber); }
     .priority-group.group-poor .priority-head,
     .priority-group.group-failing .priority-head { border-left-color: var(--red); }
     .priority-group.group-running .priority-head { border-left-color: var(--blue); }
@@ -199,8 +203,10 @@
       padding: 12px;
       min-width: 0;
     }
-    .model-card.state-strong { border-left-color: var(--green); background: linear-gradient(90deg, var(--success-panel), var(--panel) 42%); }
-    .model-card.state-warning { border-left-color: var(--amber); background: linear-gradient(90deg, var(--warning-panel), var(--panel) 42%); }
+    .model-card.state-strong,
+    .model-card.state-healthy { border-left-color: var(--green); background: linear-gradient(90deg, var(--success-panel), var(--panel) 42%); }
+    .model-card.state-warning,
+    .model-card.state-degraded { border-left-color: var(--amber); background: linear-gradient(90deg, var(--warning-panel), var(--panel) 42%); }
     .model-card.state-poor,
     .model-card.state-failing { border-left-color: var(--red); background: linear-gradient(90deg, var(--danger-panel), var(--panel) 42%); }
     .model-card.state-running { border-left-color: var(--blue); background: linear-gradient(90deg, var(--info-panel), var(--panel) 42%); }
@@ -236,6 +242,7 @@
     }
     .priority-pill { color: var(--blue); background: var(--blue-soft); }
     .healthy { color: var(--green); background: var(--green-soft); }
+    .degraded { color: var(--amber); background: var(--amber-soft); }
     .running { color: var(--blue); background: var(--blue-soft); }
     .failing { color: var(--red); background: var(--red-soft); }
     .limited { color: var(--amber); background: var(--amber-soft); }
@@ -249,7 +256,8 @@
       margin-top: 6px;
     }
     .bar > span { display: block; height: 100%; background: var(--green); border-radius: 999px; }
-    .bar.warning > span { background: var(--amber); }
+    .bar.warning > span,
+    .bar.degraded > span { background: var(--amber); }
     .bar.poor > span,
     .bar.failing > span { background: var(--red); }
     .bar.running > span { background: var(--blue); }
@@ -257,8 +265,10 @@
     .failbar > span { background: var(--red); }
     .tokenbar > span { background: var(--cyan); }
     .spark-row { padding: 12px 14px; border-bottom: 1px solid var(--line); }
-    .spark-row.state-strong { box-shadow: inset 3px 0 0 var(--green); }
-    .spark-row.state-warning { box-shadow: inset 3px 0 0 var(--amber); background: var(--warning-panel); }
+    .spark-row.state-strong,
+    .spark-row.state-healthy { box-shadow: inset 3px 0 0 var(--green); }
+    .spark-row.state-warning,
+    .spark-row.state-degraded { box-shadow: inset 3px 0 0 var(--amber); background: var(--warning-panel); }
     .spark-row.state-poor,
     .spark-row.state-failing { box-shadow: inset 3px 0 0 var(--red); background: var(--danger-panel); }
     .spark-row.state-running { box-shadow: inset 3px 0 0 var(--blue); background: var(--info-panel); }
@@ -299,6 +309,71 @@
       overflow: hidden;
     }
     .empty { padding: 18px; color: var(--muted); }
+    .notice {
+      margin-bottom: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px 14px;
+      background: var(--info-panel);
+      color: var(--text);
+    }
+    .notice.error {
+      border-color: color-mix(in srgb, var(--red) 35%, var(--line));
+      background: var(--danger-panel);
+    }
+    .notice.hidden { display: none; }
+    .capability-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .capability-pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--panel-soft);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .window-card {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .window-card:last-child { border-bottom: 0; }
+    .window-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .window-stat {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: var(--panel-soft);
+    }
+    .window-stat span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+    .window-stat strong {
+      display: block;
+      margin-top: 5px;
+      font-size: 13px;
+    }
+    .window-note {
+      color: var(--muted);
+      margin-top: 8px;
+      font-size: 12px;
+      line-height: 1.35;
+    }
     @media (max-width: 1100px) {
       .kpis { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
       .main-grid { grid-template-columns: 1fr; }
@@ -329,6 +404,7 @@
         <div class="status-line" id="statusLine">Waiting for data</div>
       </div>
     </header>
+    <div class="notice hidden" id="dashboardNotice"></div>
 
     <section class="kpis">
       <div class="panel kpi info"><div class="label">Active</div><div class="value" id="kActive">0</div><div class="hint">running provider calls</div></div>
@@ -347,7 +423,7 @@
     <main class="main-grid">
       <section class="panel">
         <div class="section-title">
-          <span>Models by Priority</span>
+          <span>Backends by Priority</span>
           <span id="modelCount" class="meta"></span>
         </div>
         <div class="priority-groups" id="priorityGroups"></div>
@@ -378,9 +454,10 @@
     const ms = value => value === null || value === undefined ? "-" : `${Math.round(value)} ms`;
     const when = seconds => seconds ? new Date(seconds * 1000).toLocaleTimeString() : "-";
     const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+    let lastUpdatedAt = null;
 
     function statusClass(status) {
-      return ["healthy", "running", "failing", "limited", "idle"].includes(status) ? status : "idle";
+      return ["healthy", "degraded", "running", "failing", "limited", "idle"].includes(status) ? status : "idle";
     }
 
     function setTheme(theme) {
@@ -392,25 +469,29 @@
       });
     }
 
-    function healthState(item) {
-      if (item.status === "limited") return "limited";
-      if (item.status === "running") return "running";
-      if (item.status === "failing") return "failing";
-      if (item.success_rate === null || item.success_rate === undefined) return "idle";
-      if (item.success_rate >= 95) return "strong";
-      if (item.success_rate >= 75) return "warning";
-      if (item.success_rate > 0) return "poor";
-      return item.attempts ? "failing" : "idle";
+    function setNotice(message = "", isError = false) {
+      const notice = document.getElementById("dashboardNotice");
+      if (!message) {
+        notice.className = "notice hidden";
+        notice.textContent = "";
+        return;
+      }
+      notice.className = `notice${isError ? " error" : ""}`;
+      notice.textContent = message;
     }
 
-    function groupState(items, rate) {
-      if (items.some(item => item.active > 0)) return "running";
-      if (items.some(item => item.status === "limited")) return "limited";
-      if (rate === null || rate === undefined) return "idle";
-      if (rate >= 95) return "strong";
-      if (rate >= 75) return "warning";
-      if (rate > 0) return "poor";
-      return "failing";
+    function healthState(item) {
+      return item.health_tier || item.status || "idle";
+    }
+
+    function groupState(items) {
+      const states = items.map(healthState);
+      if (states.includes("running")) return "running";
+      if (states.includes("limited")) return "limited";
+      if (states.includes("failing")) return "failing";
+      if (states.includes("degraded")) return "degraded";
+      if (states.includes("healthy")) return "healthy";
+      return "idle";
     }
 
     function bar(width, cls = "") {
@@ -465,9 +546,28 @@
         .trim();
       if (detail.length > 150) detail = `${detail.slice(0, 147)}...`;
       if (!detail || detail === text) {
-        detail = code ? `The provider returned HTTP ${code}. Check this backend's quota, credentials, or provider status.` : "Check this backend's quota, credentials, or provider status.";
+        detail = code ? `The provider returned HTTP ${code}. Check quota, credentials, or upstream status.` : "Check quota, credentials, or upstream status.";
       }
       return { title, detail };
+    }
+
+    function capabilityLabels(item) {
+      const capabilities = item.capabilities || {};
+      const labels = [];
+      if (capabilities.supports_tools) labels.push("tools");
+      if (capabilities.supports_vision) labels.push("vision");
+      if (capabilities.supports_reasoning) labels.push("reasoning");
+      if (capabilities.supports_streaming) labels.push("streaming");
+      if (capabilities.max_context_tokens) labels.push(`${num(capabilities.max_context_tokens)} ctx`);
+      if (capabilities.max_output_tokens) labels.push(`${num(capabilities.max_output_tokens)} out`);
+      if (Array.isArray(capabilities.tags)) labels.push(...capabilities.tags);
+      return labels;
+    }
+
+    function renderCapabilities(item) {
+      const labels = capabilityLabels(item);
+      if (!labels.length) return "";
+      return `<div class="capability-list">${labels.map(label => `<span class="capability-pill">${esc(label)}</span>`).join("")}</div>`;
     }
 
     function renderModelCard(item) {
@@ -493,6 +593,7 @@
           <div class="stat"><span>Tokens</span><strong>${num(item.total_tokens)}</strong></div>
           <div class="stat"><span>Limited</span><strong>${num(item.rate_limited_skips)}</strong></div>
         </div>
+        ${renderCapabilities(item)}
         ${error ? `<div class="error-card" title="${esc(item.last_error)}"><span>Last error</span><strong>${esc(error.title)}</strong><p>${esc(error.detail)}</p></div>` : ""}
       </article>`;
     }
@@ -504,7 +605,7 @@
         const attempts = items.reduce((total, item) => total + item.attempts, 0);
         const successes = items.reduce((total, item) => total + item.successes, 0);
         const rate = attempts ? successes / attempts * 100 : null;
-        const state = groupState(items, rate);
+        const state = groupState(items);
         return `<section class="priority-group group-${state}">
           <div class="priority-head">
             <div class="priority-title">
@@ -519,7 +620,37 @@
       }).join("") || `<div class="empty">No backends configured</div>`;
     }
 
+    function renderRateWindows(backends) {
+      const container = document.getElementById("windowBars");
+      const limited = backends.filter(item => {
+        const windows = item.rate_windows || {};
+        return Object.values(windows).some(window => window.request_limit || window.token_limit);
+      });
+      container.innerHTML = limited.map(item => {
+        const windows = item.rate_windows || {};
+        const renderWindow = (label, window) => {
+          const requestText = window.request_limit ? `${num(window.requests)} / ${num(window.request_limit)} req` : `${num(window.requests)} req`;
+          const tokenText = window.token_limit ? `${num(window.tokens)} / ${num(window.token_limit)} tok` : `${num(window.tokens)} tok`;
+          return `<div class="window-stat">
+            <span>${esc(label)}</span>
+            <strong>${esc(requestText)}</strong>
+            <div class="window-note">${esc(tokenText)}</div>
+          </div>`;
+        };
+        return `<div class="window-card">
+          <div class="spark-head"><span class="spark-label">${esc(item.label)}</span><span class="spark-value">${item.rate_limited ? "currently limited" : "within limits"}</span></div>
+          <div class="window-grid">
+            ${renderWindow("Minute", windows.minute || { requests: 0, tokens: 0 })}
+            ${renderWindow("Hour", windows.hour || { requests: 0, tokens: 0 })}
+            ${renderWindow("Day", windows.day || { requests: 0, tokens: 0 })}
+          </div>
+        </div>`;
+      }).join("") || `<div class="empty">No rate limits configured</div>`;
+    }
+
     function render(data) {
+      lastUpdatedAt = data.generated_at;
+      setNotice("");
       const totals = data.totals;
       const backends = data.backends;
       const passed = totals.successes || 0;
@@ -527,7 +658,7 @@
       const passFailTotal = passed + failed;
       const passedWidth = passFailTotal ? passed / passFailTotal * 100 : 0;
       const failedWidth = passFailTotal ? failed / passFailTotal * 100 : 0;
-      document.getElementById("subtitle").textContent = `${data.model_name} | routing: ${data.model_routing} | cycles: ${data.keep_cycles}`;
+      document.getElementById("subtitle").textContent = `${data.model_name} alias | ${data.model_routing} matching | ${data.keep_cycles} cycles | ${data.state_store} state`;
       document.getElementById("statusLine").textContent = `Updated ${when(data.generated_at)} | started ${when(data.started_at)}`;
       document.getElementById("kActive").textContent = num(totals.active);
       document.getElementById("kTokens").textContent = num(totals.total_tokens);
@@ -541,16 +672,13 @@
       document.getElementById("kSuccessHint").textContent = `${num(totals.attempts)} attempts`;
       document.getElementById("kLimited").textContent = num(totals.rate_limited_skips);
       document.getElementById("kBackends").textContent = num(totals.backends);
-      document.getElementById("modelCount").textContent = `${num(backends.length)} models`;
+      document.getElementById("modelCount").textContent = `${num(backends.length)} backends`;
       renderPriorityGroups(backends);
 
-      const activeFirst = [...backends].sort((a, b) => (b.success_rate || 0) - (a.success_rate || 0));
-      renderSpark(document.getElementById("successBars"), activeFirst, item => item.success_rate || 0, item => item.label, "", healthState);
+      const reliability = [...backends].sort((a, b) => (b.success_rate || 0) - (a.success_rate || 0));
+      renderSpark(document.getElementById("successBars"), reliability, item => item.success_rate || 0, item => item.label, "", healthState);
       renderSpark(document.getElementById("tokenBars"), backends, item => item.total_tokens, item => item.label, "tokenbar");
-      renderSpark(document.getElementById("windowBars"), backends, item => {
-        const counters = item.rate_counters.requests || {};
-        return Math.max(0, ...Object.values(counters));
-      }, item => item.label, "failbar");
+      renderRateWindows(backends);
     }
 
     async function refresh() {
@@ -559,6 +687,8 @@
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         render(await response.json());
       } catch (error) {
+        const staleText = lastUpdatedAt ? ` Last good update: ${when(lastUpdatedAt)}.` : "";
+        setNotice(`Dashboard data is unavailable right now. ${error.message}.${staleText}`, true);
         document.getElementById("statusLine").textContent = `Dashboard error: ${error.message}`;
       }
     }

@@ -78,6 +78,19 @@ class Usage(BaseModel):
     total_tokens: int = 0
 
 
+def _normalize_usage(usage: Mapping[str, Any] | None) -> dict[str, int]:
+    if not usage:
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    prompt = int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0)
+    completion = int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0)
+    total = int(usage.get("total_tokens", prompt + completion) or 0)
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total,
+    }
+
+
 class ChatCompletionResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -95,12 +108,14 @@ def make_completion_response(
     *,
     message: Mapping[str, Any] | None = None,
     finish_reason: str | None = "stop",
+    usage: Mapping[str, Any] | None = None,
 ) -> ChatCompletionResponse:
     raw_message = dict(message or {"role": "assistant", "content": content})
     raw_message.setdefault("role", "assistant")
     return ChatCompletionResponse(
         model=model,
         choices=[Choice(message=ChoiceMessage(**raw_message), finish_reason=finish_reason)],
+        usage=Usage(**_normalize_usage(usage)),
     )
 
 
@@ -224,9 +239,11 @@ def make_responses_response(
     *,
     message: Mapping[str, Any] | None = None,
     status: str = "completed",
+    usage: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     output_item, output_text = message_to_response_output(message or {"role": "assistant", "content": content})
     output_item["status"] = status
+    normalized_usage = _normalize_usage(usage)
     return {
         "id": response_id,
         "object": "response",
@@ -236,9 +253,9 @@ def make_responses_response(
         "output": [output_item],
         "output_text": output_text,
         "usage": {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
+            "input_tokens": normalized_usage["prompt_tokens"],
+            "output_tokens": normalized_usage["completion_tokens"],
+            "total_tokens": normalized_usage["total_tokens"],
         },
     }
 
@@ -445,6 +462,7 @@ def make_anthropic_response(
     *,
     message: Mapping[str, Any] | None = None,
     stop_reason: str = "end_turn",
+    usage: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     content_blocks: list[dict[str, Any]] = []
     if message and message.get("tool_calls"):
@@ -474,6 +492,7 @@ def make_anthropic_response(
         content_blocks = content
     else:
         content_blocks = [{"type": "text", "text": str(content) if content else ""}]
+    normalized_usage = _normalize_usage(usage)
     return {
         "id": msg_id,
         "type": "message",
@@ -483,8 +502,8 @@ def make_anthropic_response(
         "stop_reason": stop_reason,
         "stop_sequence": None,
         "usage": {
-            "input_tokens": 0,
-            "output_tokens": 0,
+            "input_tokens": normalized_usage["prompt_tokens"],
+            "output_tokens": normalized_usage["completion_tokens"],
         },
     }
 
