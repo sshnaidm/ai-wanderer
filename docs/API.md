@@ -38,11 +38,17 @@ Standard OpenAI chat completions endpoint.
 ```
 
 The `model` field can be:
-- `"aifree"` (or whatever you set `model_name` to) -- uses any available provider.
-- A specific backend model name (e.g., `"gemini-2.5-flash"`) -- only uses
-  providers configured with that model (when `model_routing: "match"`).
-- Any arbitrary name -- with the default `model_routing: "any"`, the model name
-  is ignored and all providers are used in priority order.
+- `"aifree"` (or whatever you set `model_name` to) -- the single public alias
+  model exposed by the proxy.
+- A specific backend model name (e.g., `"gemini-2.5-flash"`) -- with
+  `model_routing: "match"`, the proxy tries matching backends first.
+- Any arbitrary name -- with the default `model_routing: "any"`, the model
+  string is ignored and all providers are used in priority order.
+
+Even with `model_routing: "match"`, if no backend model matches the request,
+the proxy still falls back to all configured providers. This service behaves as
+a single alias model with optional matching hints, not as a strict model
+catalog.
 
 **Supported parameters:** `temperature`, `top_p`, `n`, `stop`, `max_tokens`,
 `presence_penalty`, `frequency_penalty`, `tools`, `tool_choice`,
@@ -141,8 +147,9 @@ without any code changes -- just set `ANTHROPIC_BASE_URL`.
 }
 ```
 
-The `model` field works the same way as the OpenAI endpoints: use `"aifree"`
-for any available provider, or a specific backend model name.
+The `model` field works the same way as the OpenAI endpoints: use the alias
+model (default: `"aifree"`) for the normal proxy flow, or provide a backend
+model name as a routing hint when `model_routing: "match"` is enabled.
 
 **Supported parameters:** `max_tokens`, `system` (string or content block
 array), `temperature`, `top_p`, `top_k`, `stop_sequences`, `stream`,
@@ -205,7 +212,7 @@ aider         # aider with Anthropic models
 
 ## List Models - `GET /v1/models`
 
-Returns the configured model name.
+Returns the single configured alias model name exposed by the proxy.
 
 ```json
 {
@@ -303,7 +310,6 @@ sending partial data, the stream ends with an error (no failover mid-stream).
 
 | HTTP Code | When | Error Code |
 |-----------|------|------------|
-| 400 | Requested model not configured | `model_not_found` |
 | 401 | Invalid or missing API key | `auth_error` |
 | 503 | All providers failed | `all_providers_failed` |
 
@@ -321,7 +327,6 @@ sending partial data, the stream ends with an error (no failover mid-stream).
 
 | HTTP Code | When | Error Type |
 |-----------|------|------------|
-| 400 | Requested model not configured | `not_found_error` |
 | 401 | Invalid or missing API key | `auth_error` |
 | 529 | All providers failed | `overloaded_error` |
 

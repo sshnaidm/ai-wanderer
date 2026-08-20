@@ -115,6 +115,104 @@ providers:
         assert backend.base_url == "https://api.groq.com/openai/v1"
         assert backend.extra == {"timeout": 30}
 
+    def test_backend_capabilities_are_loaded(self, tmp_path):
+        path = _write_yaml(
+            tmp_path,
+            """
+providers:
+  - priority: 1
+    backends:
+      - provider: gemini
+        api_key: "key"
+        model: "gemini-2.5-flash"
+        capabilities:
+          supports_tools: true
+          supports_vision: true
+          supports_reasoning: false
+          supports_streaming: true
+          max_context_tokens: 1048576
+          max_output_tokens: 8192
+          tags: ["cloud", "fast"]
+""",
+        )
+        backend = load_config(path).providers[0].backends[0]
+        assert backend.capabilities is not None
+        assert backend.capabilities.supports_tools is True
+        assert backend.capabilities.supports_vision is True
+        assert backend.capabilities.supports_reasoning is False
+        assert backend.capabilities.supports_streaming is True
+        assert backend.capabilities.max_context_tokens == 1048576
+        assert backend.capabilities.max_output_tokens == 8192
+        assert backend.capabilities.tags == ["cloud", "fast"]
+
+    def test_backend_capabilities_reject_invalid_limits(self, tmp_path):
+        path = _write_yaml(
+            tmp_path,
+            """
+providers:
+  - priority: 1
+    backends:
+      - provider: gemini
+        api_key: "key"
+        model: "gemini-2.5-flash"
+        capabilities:
+          max_context_tokens: 0
+""",
+        )
+        with pytest.raises(ValueError, match="capability limit must be >= 1"):
+            load_config(path)
+
+    def test_backend_capabilities_normalize_tags(self, tmp_path):
+        path = _write_yaml(
+            tmp_path,
+            """
+providers:
+  - priority: 1
+    backends:
+      - provider: gemini
+        api_key: "key"
+        model: "gemini-2.5-flash"
+        capabilities:
+          tags: [" cloud ", "fast", "cloud"]
+""",
+        )
+        backend = load_config(path).providers[0].backends[0]
+        assert backend.capabilities is not None
+        assert backend.capabilities.tags == ["cloud", "fast"]
+
+    def test_state_store_defaults_to_local(self, tmp_path):
+        path = _write_yaml(
+            tmp_path,
+            """
+providers:
+  - priority: 1
+    backends:
+      - provider: gemini
+        api_key: "key"
+        model: "gemini-2.5-flash"
+""",
+        )
+        config = load_config(path)
+        assert config.state_store.type == "local"
+        assert config.state_store.redis_url is None
+
+    def test_state_store_redis_requires_url(self, tmp_path):
+        path = _write_yaml(
+            tmp_path,
+            """
+state_store:
+  type: redis
+providers:
+  - priority: 1
+    backends:
+      - provider: gemini
+        api_key: "key"
+        model: "gemini-2.5-flash"
+""",
+        )
+        with pytest.raises(ValueError, match="state_store.redis_url is required"):
+            load_config(path)
+
     def test_rejects_empty_api_key(self, tmp_path):
         path = _write_yaml(
             tmp_path,

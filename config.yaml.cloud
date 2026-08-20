@@ -7,6 +7,12 @@ model_name: "aifree"
 show_provider: true
 model_routing: "any"
 
+# Optional: use Redis only when multiple app instances must share rate-limit state.
+# state_store:
+#   type: "redis"
+#   redis_url: "${REDIS_URL}"
+#   redis_prefix: "ai_free_swap"
+
 server:
   host: "0.0.0.0"
   port: 8000

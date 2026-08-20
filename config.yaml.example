@@ -9,6 +9,13 @@ model_name: "aifree"  # Name returned by /v1/models and used as the default mode
 show_provider: true  # Include provider_name in API responses
 model_routing: "any"  # "any" = ignore client model, "match" = route by model name
 
+# Optional shared state backend for multi-instance deployments.
+# For a personal or single-instance proxy, leave this as the default local mode.
+# state_store:
+#   type: "redis"
+#   redis_url: "${REDIS_URL}"
+#   redis_prefix: "ai_free_swap"
+
 server:
   host: "0.0.0.0"
   port: 8000
@@ -22,6 +29,13 @@ providers:
         name: "gemini-flash-1"
         api_key: "${GEMINI_API_KEY_1}"
         model: "gemini-2.5-flash"
+        # capabilities:    # Optional descriptive metadata for future routing policies.
+        #   supports_tools: true
+        #   supports_vision: true
+        #   supports_streaming: true
+        #   max_context_tokens: 1048576
+        #   max_output_tokens: 8192
+        #   tags: ["cloud", "fast"]
         # limits:          # Optional: rate limits to stay within free tier
         #   rpm: 15        # requests per minute
         #   rph: 500       # requests per hour

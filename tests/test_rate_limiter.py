@@ -3,8 +3,73 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
-from ai_free_swap.config import RateLimits
+import ai_free_swap.rate_limiter as rate_limiter_module
+from ai_free_swap.config import RateLimits, StateStoreConfig
 from ai_free_swap.rate_limiter import RateLimiter, _window_keys
+
+
+class _FakeRedisPipeline:
+    def __init__(self, client):
+        self.client = client
+        self.ops = []
+
+    def hincrby(self, key, field, amount):
+        self.ops.append(("hincrby", key, field, amount))
+        return self
+
+    def expire(self, key, ttl):
+        self.ops.append(("expire", key, ttl))
+        return self
+
+    def sadd(self, key, value):
+        self.ops.append(("sadd", key, value))
+        return self
+
+    def execute(self):
+        for op in self.ops:
+            name = op[0]
+            if name == "hincrby":
+                _, key, field, amount = op
+                self.client.hincrby(key, field, amount)
+            elif name == "expire":
+                continue
+            elif name == "sadd":
+                _, key, value = op
+                self.client.sadd(key, value)
+        self.ops.clear()
+
+
+class _FakeRedisClient:
+    def __init__(self):
+        self.hashes = {}
+        self.sets = {}
+
+    def pipeline(self):
+        return _FakeRedisPipeline(self)
+
+    def hgetall(self, key):
+        return dict(self.hashes.get(key, {}))
+
+    def hincrby(self, key, field, amount):
+        bucket = self.hashes.setdefault(key, {})
+        bucket[field] = int(bucket.get(field, 0)) + amount
+
+    def expire(self, key, ttl):
+        return True
+
+    def sadd(self, key, value):
+        bucket = self.sets.setdefault(key, set())
+        bucket.add(value)
+
+    def smembers(self, key):
+        return set(self.sets.get(key, set()))
+
+
+class _FakeRedisModule:
+    class Redis:
+        @staticmethod
+        def from_url(url, decode_responses=True):
+            return _FakeRedisClient()
 
 
 class TestWindowKeys:
@@ -297,3 +362,26 @@ class TestPersistence:
 
         data = json.loads(state_file.read_text())
         assert data == {}
+
+
+class TestRedisStateStore:
+    def test_redis_backend_records_and_blocks(self, monkeypatch):
+        monkeypatch.setattr(rate_limiter_module, "redis", _FakeRedisModule)
+        rl = RateLimiter(
+            state_store=StateStoreConfig(type="redis", redis_url="redis://example", redis_prefix="test"),
+        )
+        limits = RateLimits(rpm=2)
+        rl.record_request("backend-1")
+        rl.record_request("backend-1")
+        assert rl.is_allowed("backend-1", limits) is False
+
+    def test_redis_backend_snapshot_includes_counters(self, monkeypatch):
+        monkeypatch.setattr(rate_limiter_module, "redis", _FakeRedisModule)
+        rl = RateLimiter(
+            state_store=StateStoreConfig(type="redis", redis_url="redis://example", redis_prefix="test"),
+        )
+        rl.record_request("backend-1")
+        rl.record_tokens("backend-1", 50)
+        snapshot = rl.counters_snapshot()
+        assert snapshot["backend-1"]["requests"][_window_keys()["d"]] == 1
+        assert snapshot["backend-1"]["tokens"][_window_keys()["d"]] == 50

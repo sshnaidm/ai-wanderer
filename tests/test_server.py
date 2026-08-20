@@ -140,6 +140,35 @@ class TestDashboard:
         assert backend["rate_limited"] is True
         assert backend["status"] == "limited"
 
+    @pytest.mark.asyncio
+    async def test_dashboard_data_includes_backend_capabilities(self):
+        app = create_app(
+            make_config(
+                [
+                    [
+                        {
+                            "model": "test-model",
+                            "capabilities": {
+                                "supports_tools": True,
+                                "supports_streaming": True,
+                                "tags": ["local"],
+                            },
+                        }
+                    ]
+                ]
+            )
+        )
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.get("/dashboard/data")
+
+        backend = response.json()["backends"][0]
+        assert backend["capabilities"] == {
+            "supports_tools": True,
+            "supports_streaming": True,
+            "tags": ["local"],
+        }
+
 
 class TestChatCompletions:
     @pytest.mark.asyncio
@@ -153,6 +182,26 @@ class TestChatCompletions:
         assert data["choices"][0]["message"]["role"] == "assistant"
         assert data["choices"][0]["message"]["content"] == "hello from fake"
         assert data["choices"][0]["finish_reason"] == "stop"
+
+    @pytest.mark.asyncio
+    async def test_completion_propagates_usage(self):
+        app = create_app(
+            make_config(
+                [
+                    [
+                        {
+                            "model": "test-model",
+                            "response": "hello",
+                            "usage": {"prompt_tokens": 7, "completion_tokens": 5, "total_tokens": 12},
+                        }
+                    ]
+                ]
+            )
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post("/v1/chat/completions", json=_chat_payload())
+        assert response.status_code == 200
+        assert response.json()["usage"] == {"prompt_tokens": 7, "completion_tokens": 5, "total_tokens": 12}
 
     @pytest.mark.asyncio
     async def test_parallel_requests_are_not_serialized(self):
@@ -599,6 +648,26 @@ class TestResponsesAPI:
         assert response.json()["object"] == "response"
 
     @pytest.mark.asyncio
+    async def test_response_propagates_usage(self):
+        app = create_app(
+            make_config(
+                [
+                    [
+                        {
+                            "model": "test-model",
+                            "response": "hello",
+                            "usage": {"prompt_tokens": 6, "completion_tokens": 4, "total_tokens": 10},
+                        }
+                    ]
+                ]
+            )
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post("/v1/responses", json={"model": "test-model", "input": "Hello"})
+        assert response.status_code == 200
+        assert response.json()["usage"] == {"input_tokens": 6, "output_tokens": 4, "total_tokens": 10}
+
+    @pytest.mark.asyncio
     async def test_response_with_instructions(self, app):
         route_mock = AsyncMock(
             return_value=RoutedResponse(
@@ -766,6 +835,33 @@ class TestAnthropicMessages:
         assert data["id"].startswith("msg_")
         assert data["content"][0]["type"] == "text"
         assert data["content"][0]["text"] == "hello from fake"
+
+    @pytest.mark.asyncio
+    async def test_anthropic_response_propagates_usage(self):
+        app = create_app(
+            make_config(
+                [
+                    [
+                        {
+                            "model": "test-model",
+                            "response": "hello",
+                            "usage": {"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10},
+                        }
+                    ]
+                ]
+            )
+        )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/v1/messages",
+                json={
+                    "model": "test-model",
+                    "max_tokens": 100,
+                    "messages": [{"role": "user", "content": "Hi"}],
+                },
+            )
+        assert response.status_code == 200
+        assert response.json()["usage"] == {"input_tokens": 8, "output_tokens": 2}
 
     @pytest.mark.asyncio
     async def test_system_message_forwarded(self, app):
