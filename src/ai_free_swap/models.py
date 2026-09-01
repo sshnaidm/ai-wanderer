@@ -215,9 +215,7 @@ def _response_content_to_chat(content: Any) -> Any:
                 converted.append({"type": "file", "file": {"file_id": part.get("file_id", "")}})
         elif part_type == "input_file":
             file_data = {
-                key: part[key]
-                for key in ("file_id", "file_data", "file_url", "filename")
-                if part.get(key) is not None
+                key: part[key] for key in ("file_id", "file_data", "file_url", "filename") if part.get(key) is not None
             }
             converted.append({"type": "file", "file": file_data})
         else:
@@ -253,11 +251,7 @@ def _response_input_item_to_messages(item: dict[str, Any]) -> list[dict[str, Any
             }
         ]
 
-    message = {
-        key: value
-        for key, value in item.items()
-        if key not in {"type", "id", "status", "phase"}
-    }
+    message = {key: value for key, value in item.items() if key not in {"type", "id", "status", "phase"}}
     message.setdefault("role", "user")
     message["content"] = _response_content_to_chat(message.get("content"))
     return [message]
@@ -266,11 +260,7 @@ def _response_input_item_to_messages(item: dict[str, Any]) -> list[dict[str, Any
 def _response_tool_to_chat(tool: Any) -> Any:
     if not isinstance(tool, dict) or tool.get("type") != "function" or "function" in tool:
         return tool
-    function = {
-        key: tool[key]
-        for key in ("name", "description", "parameters", "strict")
-        if tool.get(key) is not None
-    }
+    function = {key: tool[key] for key in ("name", "description", "parameters", "strict") if tool.get(key) is not None}
     return {"type": "function", "function": function}
 
 

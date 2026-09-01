@@ -122,9 +122,7 @@ class TestConvertMessages:
             {"role": "tool", "tool_call_id": "call-1", "content": "result"},
         ]
         _, converted = _convert_messages(messages)
-        assert converted[0]["content"] == [
-            {"type": "tool_result", "tool_use_id": "call-1", "content": "result"}
-        ]
+        assert converted[0]["content"] == [{"type": "tool_result", "tool_use_id": "call-1", "content": "result"}]
         assert converted[0]["role"] == "user"
 
     def test_assistant_tool_calls_become_native_tool_use(self):
