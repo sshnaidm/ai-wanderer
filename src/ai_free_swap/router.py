@@ -8,7 +8,7 @@ import random
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import AsyncGenerator, AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -264,13 +264,14 @@ class Router:
     def save_state(self) -> None:
         self._rate_limiter.save()
 
-    def dashboard_snapshot(self) -> dict[str, Any]:
-        rate_data = self._rate_limiter.counters_snapshot()
+    async def dashboard_snapshot(self) -> dict[str, Any]:
+        rate_data = await self._rate_limiter.counters_snapshot_async()
         backends = [
             metrics.as_dict(
                 rate_data.get(key, {}),
                 rate_limited=bool(
-                    (limits := self._backend_limits.get(key)) and not self._rate_limiter.is_allowed(key, limits)
+                    (limits := self._backend_limits.get(key))
+                    and not self._rate_limiter.is_allowed_snapshot(rate_data.get(key, {}), limits)
                 ),
             )
             for key, metrics in sorted(
@@ -390,7 +391,7 @@ class Router:
             request_id = uuid.uuid4().hex[:8]
         errors: list[tuple[str, Exception]] = []
 
-        for backend in self._iter_attempts(requested_model, request_id):
+        async for backend in self._iter_attempts(requested_model, request_id):
             label = self._label(backend)
             t0 = time.monotonic()
             self._record_backend_start(backend)
@@ -425,11 +426,10 @@ class Router:
                 rate_key = self._rate_key(backend)
                 limits = self._backend_limits.get(rate_key)
                 if limits:
-                    self._rate_limiter.record_request(rate_key)
                     if usage:
                         total = usage.get("total_tokens", 0)
                         if total:
-                            self._rate_limiter.record_tokens(rate_key, total)
+                            await self._rate_limiter.record_tokens_async(rate_key, total)
                 self._record_backend_success(backend, elapsed, usage)
                 if limits:
                     await self._save_state_if_due()
@@ -466,7 +466,7 @@ class Router:
             request_id = uuid.uuid4().hex[:8]
         errors: list[tuple[str, Exception]] = []
 
-        for backend in self._iter_attempts(requested_model, request_id):
+        async for backend in self._iter_attempts(requested_model, request_id):
             label = self._label(backend)
             t0 = time.monotonic()
             self._record_backend_start(backend)
@@ -490,10 +490,6 @@ class Router:
                     label,
                     ttfb,
                 )
-                rate_key = self._rate_key(backend)
-                limits = self._backend_limits.get(rate_key)
-                if limits:
-                    self._rate_limiter.record_request(rate_key)
                 raw_chunks = bool(buffered and isinstance(buffered[0], dict))
                 return PreparedStream(
                     model=backend.config.model,
@@ -515,11 +511,11 @@ class Router:
 
         raise AllProvidersFailedError(errors)
 
-    def _iter_attempts(
+    async def _iter_attempts(
         self,
         requested_model: str | None,
         request_id: str,
-    ) -> Iterator[BaseProvider]:
+    ) -> AsyncGenerator[BaseProvider, None]:
         candidate_groups = self._get_candidate_groups(requested_model, request_id)
 
         for cycle in range(self.keep_cycles):
@@ -532,20 +528,20 @@ class Router:
                 )
 
             for group in candidate_groups:
-                available = []
-                for backend in group:
+                for backend in random.sample(group, len(group)):
                     rate_key = self._rate_key(backend)
                     limits = self._backend_limits.get(rate_key)
-                    if limits and not self._rate_limiter.is_allowed(rate_key, limits):
-                        self._record_rate_limited_skip(backend)
-                        logger.debug(
-                            "[%s] Skipping %s (rate limited)",
-                            request_id,
-                            self._label(backend),
-                        )
-                        continue
-                    available.append(backend)
-                yield from random.sample(available, len(available))
+                    if limits:
+                        if not await self._rate_limiter.reserve_request(rate_key, limits):
+                            self._record_rate_limited_skip(backend)
+                            logger.debug(
+                                "[%s] Skipping %s (rate limited)",
+                                request_id,
+                                self._label(backend),
+                            )
+                            continue
+                        await self._save_state_if_due()
+                    yield backend
 
     def _get_candidate_groups(
         self,
@@ -641,7 +637,7 @@ class Router:
                         + usage.get("completion_tokens", usage.get("output_tokens", 0)),
                     )
                     if total:
-                        self._rate_limiter.record_tokens(rate_key, total)
+                        await self._rate_limiter.record_tokens_async(rate_key, total)
             if stream_error:
                 self._record_backend_failure(backend, elapsed, stream_error)
             else:

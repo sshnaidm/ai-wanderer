@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import patch
 
 import pytest
@@ -253,6 +254,40 @@ class TestRouterRoute:
 
 
 class TestRouterRateLimiting:
+    @pytest.mark.asyncio
+    async def test_concurrent_requests_cannot_overshoot_limit(self, messages):
+        router = Router(
+            make_config(
+                [
+                    [{"response": "limited", "delay": 0.05, "limits": {"rpd": 1}}],
+                    [{"response": "fallback"}],
+                ]
+            )
+        )
+
+        with patch("ai_free_swap.router.random.sample", side_effect=lambda group, _: group):
+            results = await asyncio.gather(router.route(messages), router.route(messages))
+
+        assert sorted(result.content for result in results) == ["fallback", "limited"]
+
+    @pytest.mark.asyncio
+    async def test_failed_attempt_consumes_request_limit(self, messages):
+        router = Router(
+            make_config(
+                [
+                    [{"should_fail": True, "limits": {"rpd": 1}}],
+                    [{"response": "fallback"}],
+                ]
+            )
+        )
+        limited_backend = router.priority_groups[0][0]
+
+        with patch("ai_free_swap.router.random.sample", side_effect=lambda group, _: group):
+            await router.route(messages)
+            await router.route(messages)
+
+        assert len(limited_backend.invoke_calls) == 1
+
     @pytest.mark.asyncio
     async def test_rate_limited_backend_skipped(self, messages):
         router = Router(

@@ -164,12 +164,12 @@ class ResponsesRequest(BaseModel):
         if isinstance(self.input, list):
             for item in self.input:
                 if isinstance(item, dict):
-                    messages.append(item)
+                    messages.extend(_response_input_item_to_messages(item))
                 else:
                     messages.append({"role": "user", "content": item})
             return messages
         if isinstance(self.input, dict):
-            messages.append(self.input)
+            messages.extend(_response_input_item_to_messages(self.input))
             return messages
 
         messages.append({"role": "user", "content": self.input})
@@ -182,7 +182,105 @@ class ResponsesRequest(BaseModel):
         )
         if "max_output_tokens" in kwargs and "max_tokens" not in kwargs:
             kwargs["max_tokens"] = kwargs.pop("max_output_tokens")
+        tools = kwargs.get("tools")
+        if isinstance(tools, list):
+            kwargs["tools"] = [_response_tool_to_chat(tool) for tool in tools]
+        if "tool_choice" in kwargs:
+            kwargs["tool_choice"] = _response_tool_choice_to_chat(kwargs["tool_choice"])
+        reasoning = kwargs.pop("reasoning", None)
+        if isinstance(reasoning, dict) and reasoning.get("effort") is not None:
+            kwargs.setdefault("reasoning_effort", reasoning["effort"])
         return kwargs
+
+
+def _response_content_to_chat(content: Any) -> Any:
+    if not isinstance(content, list):
+        return content
+    converted: list[Any] = []
+    for part in content:
+        if not isinstance(part, dict):
+            converted.append(part)
+            continue
+        part_type = part.get("type")
+        if part_type in {"input_text", "output_text", "text"}:
+            converted.append({"type": "text", "text": part.get("text", "")})
+        elif part_type == "input_image":
+            image_url = part.get("image_url")
+            if image_url is not None:
+                image: dict[str, Any] = {"url": image_url}
+                if part.get("detail") is not None:
+                    image["detail"] = part["detail"]
+                converted.append({"type": "image_url", "image_url": image})
+            else:
+                converted.append({"type": "file", "file": {"file_id": part.get("file_id", "")}})
+        elif part_type == "input_file":
+            file_data = {
+                key: part[key]
+                for key in ("file_id", "file_data", "file_url", "filename")
+                if part.get(key) is not None
+            }
+            converted.append({"type": "file", "file": file_data})
+        else:
+            converted.append(dict(part))
+    return converted
+
+
+def _response_input_item_to_messages(item: dict[str, Any]) -> list[dict[str, Any]]:
+    item_type = item.get("type")
+    if item_type == "function_call":
+        return [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": item.get("call_id") or item.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": item.get("name", ""),
+                            "arguments": item.get("arguments", "{}"),
+                        },
+                    }
+                ],
+            }
+        ]
+    if item_type == "function_call_output":
+        return [
+            {
+                "role": "tool",
+                "tool_call_id": item.get("call_id", ""),
+                "content": item.get("output", ""),
+            }
+        ]
+
+    message = {
+        key: value
+        for key, value in item.items()
+        if key not in {"type", "id", "status", "phase"}
+    }
+    message.setdefault("role", "user")
+    message["content"] = _response_content_to_chat(message.get("content"))
+    return [message]
+
+
+def _response_tool_to_chat(tool: Any) -> Any:
+    if not isinstance(tool, dict) or tool.get("type") != "function" or "function" in tool:
+        return tool
+    function = {
+        key: tool[key]
+        for key in ("name", "description", "parameters", "strict")
+        if tool.get(key) is not None
+    }
+    return {"type": "function", "function": function}
+
+
+def _response_tool_choice_to_chat(choice: Any) -> Any:
+    if isinstance(choice, dict) and choice.get("type") == "function" and "function" not in choice:
+        return {
+            "type": "function",
+            "function": {"name": choice.get("name", "")},
+        }
+    return choice
 
 
 def _response_parts_from_content(content: Any) -> tuple[list[dict[str, Any]], str]:

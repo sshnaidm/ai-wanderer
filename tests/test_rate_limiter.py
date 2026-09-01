@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
+import pytest
+
 import ai_free_swap.rate_limiter as rate_limiter_module
 from ai_free_swap.config import RateLimits, StateStoreConfig
 from ai_free_swap.rate_limiter import RateLimiter, _window_keys
@@ -25,18 +27,30 @@ class _FakeRedisPipeline:
         self.ops.append(("sadd", key, value))
         return self
 
-    def execute(self):
+    def hgetall(self, key):
+        self.ops.append(("hgetall", key))
+        return self
+
+    async def execute(self):
+        results = []
         for op in self.ops:
             name = op[0]
             if name == "hincrby":
                 _, key, field, amount = op
                 self.client.hincrby(key, field, amount)
+                results.append(None)
             elif name == "expire":
+                results.append(True)
                 continue
             elif name == "sadd":
                 _, key, value = op
                 self.client.sadd(key, value)
+                results.append(1)
+            elif name == "hgetall":
+                _, key = op
+                results.append(self.client.hgetall(key))
         self.ops.clear()
+        return results
 
 
 class _FakeRedisClient:
@@ -61,8 +75,34 @@ class _FakeRedisClient:
         bucket = self.sets.setdefault(key, set())
         bucket.add(value)
 
-    def smembers(self, key):
+    async def smembers(self, key):
         return set(self.sets.get(key, set()))
+
+    async def srem(self, key, *values):
+        bucket = self.sets.setdefault(key, set())
+        removed = 0
+        for value in values:
+            if value in bucket:
+                bucket.remove(value)
+                removed += 1
+        return removed
+
+    async def eval(self, script, numkeys, request_key, token_key, registry_key, *args):
+        periods = args[:3]
+        request_limits = args[3:6]
+        token_limits = args[6:9]
+        backend_key = args[10]
+        for period, request_limit, token_limit in zip(periods, request_limits, token_limits):
+            request_count = int(self.hashes.get(request_key, {}).get(period, 0))
+            token_count = int(self.hashes.get(token_key, {}).get(period, 0))
+            if request_limit >= 0 and request_count >= request_limit:
+                return 0
+            if token_limit >= 0 and token_count >= token_limit:
+                return 0
+        for period in periods:
+            self.hincrby(request_key, period, 1)
+        self.sadd(registry_key, backend_key)
+        return 1
 
 
 class _FakeRedisModule:
@@ -365,23 +405,41 @@ class TestPersistence:
 
 
 class TestRedisStateStore:
-    def test_redis_backend_records_and_blocks(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_redis_backend_records_and_blocks(self, monkeypatch):
         monkeypatch.setattr(rate_limiter_module, "redis", _FakeRedisModule)
         rl = RateLimiter(
             state_store=StateStoreConfig(type="redis", redis_url="redis://example", redis_prefix="test"),
         )
         limits = RateLimits(rpm=2)
-        rl.record_request("backend-1")
-        rl.record_request("backend-1")
-        assert rl.is_allowed("backend-1", limits) is False
+        await rl.record_request_async("backend-1")
+        await rl.record_request_async("backend-1")
+        assert await rl.is_allowed_async("backend-1", limits) is False
 
-    def test_redis_backend_snapshot_includes_counters(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_redis_backend_snapshot_includes_counters(self, monkeypatch):
         monkeypatch.setattr(rate_limiter_module, "redis", _FakeRedisModule)
         rl = RateLimiter(
             state_store=StateStoreConfig(type="redis", redis_url="redis://example", redis_prefix="test"),
         )
-        rl.record_request("backend-1")
-        rl.record_tokens("backend-1", 50)
-        snapshot = rl.counters_snapshot()
+        await rl.record_request_async("backend-1")
+        await rl.record_tokens_async("backend-1", 50)
+        snapshot = await rl.counters_snapshot_async()
         assert snapshot["backend-1"]["requests"][_window_keys()["d"]] == 1
         assert snapshot["backend-1"]["tokens"][_window_keys()["d"]] == 50
+
+    @pytest.mark.asyncio
+    async def test_redis_reservation_is_atomic_and_prunes_stale_registry(self, monkeypatch):
+        monkeypatch.setattr(rate_limiter_module, "redis", _FakeRedisModule)
+        rl = RateLimiter(
+            state_store=StateStoreConfig(type="redis", redis_url="redis://example", redis_prefix="test"),
+        )
+        limits = RateLimits(rpm=1)
+
+        assert await rl.reserve_request("backend-1", limits) is True
+        assert await rl.reserve_request("backend-1", limits) is False
+
+        client = rl._redis_client
+        client.sets[rl._redis_known_keys_key()].add("stale-backend")
+        await rl.counters_snapshot_async()
+        assert "stale-backend" not in client.sets[rl._redis_known_keys_key()]
