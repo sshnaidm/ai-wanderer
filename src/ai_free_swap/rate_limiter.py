@@ -4,6 +4,7 @@ import atexit
 import json
 import logging
 import time
+import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,7 +13,7 @@ from typing import Any
 from .config import RateLimits, StateStoreConfig
 
 try:
-    import redis
+    from redis import asyncio as redis
 except ImportError:  # pragma: no cover - exercised when optional dependency is absent
     redis = None
 
@@ -55,6 +56,7 @@ class RateLimiter:
         self._dirty = False
         self._redis_client: Any | None = None
         self._redis_prefix = self._store_config.redis_prefix
+        self._local_lock = threading.Lock()
 
         if self._store_type == "redis":
             self._redis_client = self._build_redis_client(self._store_config)
@@ -73,8 +75,8 @@ class RateLimiter:
             self._counters[key] = _Counters()
         return self._counters[key]
 
-    def is_allowed(self, key: str, limits: RateLimits) -> bool:
-        c = self._current_counters(key)
+    @staticmethod
+    def _is_allowed(c: _Counters, limits: RateLimits) -> bool:
         wk = _window_keys()
         checks = [
             (limits.rpm, c.requests, "m"),
@@ -89,29 +91,78 @@ class RateLimiter:
                 return False
         return True
 
-    def record_request(self, key: str) -> None:
+    def is_allowed(self, key: str, limits: RateLimits) -> bool:
         if self._store_type == "redis":
-            self._redis_record(key, "requests", 1)
-            return
-        c = self._get(key)
+            raise RuntimeError("Use is_allowed_async() with a Redis state store")
+        with self._local_lock:
+            return self._is_allowed(self._get(key), limits)
+
+    async def is_allowed_async(self, key: str, limits: RateLimits) -> bool:
+        if self._store_type == "redis":
+            return self._is_allowed(await self._redis_get(key), limits)
+        return self.is_allowed(key, limits)
+
+    @classmethod
+    def is_allowed_snapshot(
+        cls,
+        counters: dict[str, dict[str, int]],
+        limits: RateLimits,
+    ) -> bool:
+        normalized = _Counters()
+        normalized.requests.update(counters.get("requests", {}))
+        normalized.tokens.update(counters.get("tokens", {}))
+        return cls._is_allowed(normalized, limits)
+
+    async def reserve_request(self, key: str, limits: RateLimits) -> bool:
+        """Atomically enforce limits and count a provider request attempt."""
+        if self._store_type == "redis":
+            return await self._redis_reserve_request(key, limits)
+        with self._local_lock:
+            counters = self._get(key)
+            if not self._is_allowed(counters, limits):
+                return False
+            self._record_request_local(counters)
+            return True
+
+    def _record_request_local(self, counters: _Counters) -> None:
         wk = _window_keys()
         for period in ("m", "h", "d"):
-            c.requests[wk[period]] += 1
+            counters.requests[wk[period]] += 1
         self._dirty = True
         self._tick_cleanup()
+
+    def record_request(self, key: str) -> None:
+        if self._store_type == "redis":
+            raise RuntimeError("Use record_request_async() with a Redis state store")
+        with self._local_lock:
+            self._record_request_local(self._get(key))
+
+    async def record_request_async(self, key: str) -> None:
+        if self._store_type == "redis":
+            await self._redis_record(key, "requests", 1)
+            return
+        self.record_request(key)
 
     def record_tokens(self, key: str, tokens: int) -> None:
         if tokens <= 0:
             return
         if self._store_type == "redis":
-            self._redis_record(key, "tokens", tokens)
+            raise RuntimeError("Use record_tokens_async() with a Redis state store")
+        with self._local_lock:
+            c = self._get(key)
+            wk = _window_keys()
+            for period in ("m", "h", "d"):
+                c.tokens[wk[period]] += tokens
+            self._dirty = True
+            self._tick_cleanup()
+
+    async def record_tokens_async(self, key: str, tokens: int) -> None:
+        if tokens <= 0:
             return
-        c = self._get(key)
-        wk = _window_keys()
-        for period in ("m", "h", "d"):
-            c.tokens[wk[period]] += tokens
-        self._dirty = True
-        self._tick_cleanup()
+        if self._store_type == "redis":
+            await self._redis_record(key, "tokens", tokens)
+            return
+        self.record_tokens(key, tokens)
 
     def save_if_due(self) -> None:
         snapshot = self.snapshot_if_due()
@@ -160,9 +211,15 @@ class RateLimiter:
 
     def counters_snapshot(self) -> dict[str, dict[str, dict[str, int]]]:
         if self._store_type == "redis":
-            return self._redis_snapshot()
-        self._cleanup()
-        return self._to_json_data()
+            raise RuntimeError("Use counters_snapshot_async() with a Redis state store")
+        with self._local_lock:
+            self._cleanup()
+            return self._to_json_data()
+
+    async def counters_snapshot_async(self) -> dict[str, dict[str, dict[str, int]]]:
+        if self._store_type == "redis":
+            return await self._redis_snapshot()
+        return self.counters_snapshot()
 
     def _tick_cleanup(self) -> None:
         self._ops += 1
@@ -235,11 +292,6 @@ class RateLimiter:
                 data[key] = entry
         return data
 
-    def _current_counters(self, key: str) -> _Counters:
-        if self._store_type == "redis":
-            return self._redis_get(key)
-        return self._get(key)
-
     @staticmethod
     def write_snapshot(state_file: Path, data: dict[str, dict[str, dict[str, int]]]) -> None:
         tmp = state_file.with_suffix(".tmp")
@@ -265,11 +317,7 @@ class RateLimiter:
     def _redis_known_keys_key(self) -> str:
         return f"{self._redis_prefix}:backend_keys"
 
-    def _redis_touch_backend(self, key: str) -> None:
-        assert self._redis_client is not None
-        self._redis_client.sadd(self._redis_known_keys_key(), key)
-
-    def _redis_record(self, key: str, counter_type: str, amount: int) -> None:
+    async def _redis_record(self, key: str, counter_type: str, amount: int) -> None:
         assert self._redis_client is not None
         wk = _window_keys()
         redis_key = self._redis_backend_key(key, counter_type)
@@ -278,7 +326,52 @@ class RateLimiter:
             pipe.hincrby(redis_key, wk[period], amount)
         pipe.expire(redis_key, _REDIS_HASH_TTL_SECONDS)
         pipe.sadd(self._redis_known_keys_key(), key)
-        pipe.execute()
+        await pipe.execute()
+
+    async def _redis_reserve_request(self, key: str, limits: RateLimits) -> bool:
+        assert self._redis_client is not None
+        wk = _window_keys()
+        script = """
+local periods = {ARGV[1], ARGV[2], ARGV[3]}
+for i = 1, 3 do
+    local request_limit = tonumber(ARGV[3 + i])
+    local token_limit = tonumber(ARGV[6 + i])
+    if request_limit >= 0 and tonumber(redis.call('HGET', KEYS[1], periods[i]) or '0') >= request_limit then
+        return 0
+    end
+    if token_limit >= 0 and tonumber(redis.call('HGET', KEYS[2], periods[i]) or '0') >= token_limit then
+        return 0
+    end
+end
+for i = 1, 3 do
+    redis.call('HINCRBY', KEYS[1], periods[i], 1)
+end
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[10]))
+redis.call('SADD', KEYS[3], ARGV[11])
+return 1
+"""
+        args = [
+            wk["m"],
+            wk["h"],
+            wk["d"],
+            limits.rpm if limits.rpm is not None else -1,
+            limits.rph if limits.rph is not None else -1,
+            limits.rpd if limits.rpd is not None else -1,
+            limits.tpm if limits.tpm is not None else -1,
+            limits.tph if limits.tph is not None else -1,
+            limits.tpd if limits.tpd is not None else -1,
+            _REDIS_HASH_TTL_SECONDS,
+            key,
+        ]
+        result = await self._redis_client.eval(
+            script,
+            3,
+            self._redis_backend_key(key, "requests"),
+            self._redis_backend_key(key, "tokens"),
+            self._redis_known_keys_key(),
+            *args,
+        )
+        return bool(result)
 
     @staticmethod
     def _coerce_redis_counter(value: Any) -> int:
@@ -291,12 +384,14 @@ class RateLimiter:
                 return 0
         return 0
 
-    def _redis_get(self, key: str) -> _Counters:
+    async def _redis_get(self, key: str) -> _Counters:
         assert self._redis_client is not None
         wk = _window_keys()
         current_keys = set(wk.values())
-        requests_raw = self._redis_client.hgetall(self._redis_backend_key(key, "requests"))
-        tokens_raw = self._redis_client.hgetall(self._redis_backend_key(key, "tokens"))
+        pipe = self._redis_client.pipeline()
+        pipe.hgetall(self._redis_backend_key(key, "requests"))
+        pipe.hgetall(self._redis_backend_key(key, "tokens"))
+        requests_raw, tokens_raw = await pipe.execute()
         counters = _Counters()
         for window_key, value in requests_raw.items():
             if window_key in current_keys:
@@ -306,11 +401,28 @@ class RateLimiter:
                 counters.tokens[window_key] = self._coerce_redis_counter(value)
         return counters
 
-    def _redis_snapshot(self) -> dict[str, dict[str, dict[str, int]]]:
+    async def _redis_snapshot(self) -> dict[str, dict[str, dict[str, int]]]:
         assert self._redis_client is not None
         data: dict[str, dict[str, dict[str, int]]] = {}
-        for key in self._redis_client.smembers(self._redis_known_keys_key()):
-            counters = self._redis_get(key)
+        keys = sorted(await self._redis_client.smembers(self._redis_known_keys_key()))
+        pipe = self._redis_client.pipeline()
+        for key in keys:
+            pipe.hgetall(self._redis_backend_key(key, "requests"))
+            pipe.hgetall(self._redis_backend_key(key, "tokens"))
+        raw_entries = await pipe.execute() if keys else []
+        stale_keys: list[str] = []
+        wk = _window_keys()
+        current_keys = set(wk.values())
+        for index, key in enumerate(keys):
+            requests_raw = raw_entries[index * 2]
+            tokens_raw = raw_entries[index * 2 + 1]
+            counters = _Counters()
+            for window_key, value in requests_raw.items():
+                if window_key in current_keys:
+                    counters.requests[window_key] = self._coerce_redis_counter(value)
+            for window_key, value in tokens_raw.items():
+                if window_key in current_keys:
+                    counters.tokens[window_key] = self._coerce_redis_counter(value)
             entry: dict[str, dict[str, int]] = {}
             if counters.requests:
                 entry["requests"] = dict(counters.requests)
@@ -318,4 +430,8 @@ class RateLimiter:
                 entry["tokens"] = dict(counters.tokens)
             if entry:
                 data[key] = entry
+            else:
+                stale_keys.append(key)
+        if stale_keys:
+            await self._redis_client.srem(self._redis_known_keys_key(), *stale_keys)
         return data

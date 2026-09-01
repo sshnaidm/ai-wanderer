@@ -1,7 +1,12 @@
+import json
+from types import SimpleNamespace
+
 from ai_free_swap.providers.anthropic_provider import (
     _convert_content,
     _convert_image_url,
     _convert_messages,
+    _extract_response,
+    _filter_kwargs,
 )
 
 
@@ -112,10 +117,78 @@ class TestConvertMessages:
         assert len(converted) == 1
         assert converted[0]["content"] == "Hi"
 
-    def test_tool_message_still_stringified(self):
+    def test_tool_message_becomes_native_tool_result(self):
         messages = [
             {"role": "tool", "tool_call_id": "call-1", "content": "result"},
         ]
         _, converted = _convert_messages(messages)
-        assert converted[0]["content"] == "[call-1] result"
+        assert converted[0]["content"] == [{"type": "tool_result", "tool_use_id": "call-1", "content": "result"}]
         assert converted[0]["role"] == "user"
+
+    def test_assistant_tool_calls_become_native_tool_use(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "weather", "arguments": '{"city":"Paris"}'},
+                    }
+                ],
+            }
+        ]
+
+        _, converted = _convert_messages(messages)
+
+        assert converted[0]["content"] == [
+            {
+                "type": "tool_use",
+                "id": "call-1",
+                "name": "weather",
+                "input": {"city": "Paris"},
+            }
+        ]
+
+
+class TestToolConversion:
+    def test_tools_and_choice_are_converted_to_native_shape(self):
+        kwargs = _filter_kwargs(
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "weather",
+                            "description": "Get weather",
+                            "parameters": {"type": "object"},
+                        },
+                    }
+                ],
+                "tool_choice": {"type": "function", "function": {"name": "weather"}},
+            }
+        )
+
+        assert kwargs["tools"] == [
+            {
+                "name": "weather",
+                "description": "Get weather",
+                "input_schema": {"type": "object"},
+            }
+        ]
+        assert kwargs["tool_choice"] == {"type": "tool", "name": "weather"}
+
+    def test_tool_use_response_is_preserved(self):
+        response = SimpleNamespace(
+            content=[
+                SimpleNamespace(type="text", text="Checking"),
+                SimpleNamespace(type="tool_use", id="toolu-1", name="weather", input={"city": "Paris"}),
+            ]
+        )
+
+        text, message = _extract_response(response)
+
+        assert text == "Checking"
+        assert message["tool_calls"][0]["id"] == "toolu-1"
+        assert json.loads(message["tool_calls"][0]["function"]["arguments"]) == {"city": "Paris"}

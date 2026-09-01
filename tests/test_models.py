@@ -144,6 +144,73 @@ class TestResponsesRequest:
             {"role": "assistant", "content": "Hi"},
         ]
 
+    def test_structured_content_is_converted_to_chat_shape(self):
+        request = ResponsesRequest(
+            model="test-model",
+            input=[
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Describe this"},
+                        {"type": "input_image", "image_url": "https://example.com/image.png"},
+                        {"type": "input_file", "file_id": "file-1"},
+                    ],
+                }
+            ],
+        )
+
+        assert request.to_messages() == [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+                    {"type": "file", "file": {"file_id": "file-1"}},
+                ],
+            }
+        ]
+
+    def test_function_items_and_tools_are_converted(self):
+        request = ResponsesRequest(
+            model="test-model",
+            input=[
+                {
+                    "type": "function_call",
+                    "call_id": "call-1",
+                    "name": "weather",
+                    "arguments": '{"city":"Paris"}',
+                },
+                {"type": "function_call_output", "call_id": "call-1", "output": "sunny"},
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "name": "weather",
+                    "description": "Get weather",
+                    "parameters": {"type": "object"},
+                }
+            ],
+            tool_choice={"type": "function", "name": "weather"},
+        )
+
+        messages = request.to_messages()
+        kwargs = request.to_model_kwargs()
+
+        assert messages[0]["tool_calls"][0]["function"]["name"] == "weather"
+        assert messages[1] == {"role": "tool", "tool_call_id": "call-1", "content": "sunny"}
+        assert kwargs["tools"] == [
+            {
+                "type": "function",
+                "function": {
+                    "name": "weather",
+                    "description": "Get weather",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ]
+        assert kwargs["tool_choice"] == {"type": "function", "function": {"name": "weather"}}
+
     def test_blank_model_falls_back_to_aifree(self):
         request = ResponsesRequest(model="   ", input="Hello")
         assert request.model == "aifree"
