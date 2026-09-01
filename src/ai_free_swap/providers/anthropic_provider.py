@@ -88,7 +88,36 @@ def _convert_messages(messages: list[dict]) -> tuple[str | None, list[dict]]:
         if role == "tool":
             identifier = msg.get("tool_call_id") or msg.get("name") or "tool"
             text = _stringify_content(msg.get("content"))
-            content: str | list[dict] = f"[{identifier}] {text}" if text else f"[{identifier}]"
+            content: str | list[dict] = [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": identifier,
+                    "content": text,
+                }
+            ]
+        elif role == "assistant" and msg.get("tool_calls"):
+            content = []
+            text = _stringify_content(msg.get("content"))
+            if text:
+                content.append({"type": "text", "text": text})
+            for tool_call in msg["tool_calls"]:
+                if not isinstance(tool_call, dict):
+                    continue
+                function = tool_call.get("function", {})
+                arguments = function.get("arguments", {}) if isinstance(function, dict) else {}
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        arguments = {"raw": arguments}
+                content.append(
+                    {
+                        "type": "tool_use",
+                        "id": tool_call.get("id", ""),
+                        "name": function.get("name", "") if isinstance(function, dict) else "",
+                        "input": arguments,
+                    }
+                )
         else:
             content = _convert_content(msg.get("content"))
         converted.append(
@@ -104,16 +133,77 @@ def _convert_messages(messages: list[dict]) -> tuple[str | None, list[dict]]:
 _PASSTHROUGH_KWARGS = {"temperature", "top_p", "top_k", "stop", "max_tokens"}
 
 
+def _convert_tools(tools: Any) -> list[dict[str, Any]]:
+    if not isinstance(tools, list):
+        return []
+    converted: list[dict[str, Any]] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if "input_schema" in tool and "name" in tool:
+            converted.append(dict(tool))
+            continue
+        function = tool.get("function")
+        if tool.get("type") != "function" or not isinstance(function, dict):
+            continue
+        native: dict[str, Any] = {
+            "name": function.get("name", ""),
+            "input_schema": function.get("parameters", {"type": "object", "properties": {}}),
+        }
+        if function.get("description") is not None:
+            native["description"] = function["description"]
+        if function.get("strict") is not None:
+            native["strict"] = function["strict"]
+        converted.append(native)
+    return converted
+
+
+def _convert_tool_choice(choice: Any) -> Any:
+    if isinstance(choice, str):
+        return {"type": {"required": "any"}.get(choice, choice)}
+    if not isinstance(choice, dict):
+        return choice
+    if choice.get("type") == "function":
+        function = choice.get("function", {})
+        return {
+            "type": "tool",
+            "name": function.get("name", "") if isinstance(function, dict) else "",
+        }
+    return choice
+
+
 def _filter_kwargs(kwargs: dict) -> dict:
-    return {k: v for k, v in kwargs.items() if k in _PASSTHROUGH_KWARGS}
+    filtered = {k: v for k, v in kwargs.items() if k in _PASSTHROUGH_KWARGS}
+    tools = _convert_tools(kwargs.get("tools"))
+    if tools:
+        filtered["tools"] = tools
+    if kwargs.get("tool_choice") is not None:
+        filtered["tool_choice"] = _convert_tool_choice(kwargs["tool_choice"])
+    return filtered
 
 
-def _extract_text(response) -> str:
-    parts = []
+def _extract_response(response) -> tuple[str, dict[str, Any]]:
+    parts: list[str] = []
+    tool_calls: list[dict[str, Any]] = []
     for block in response.content:
         if block.type == "text":
             parts.append(block.text)
-    return "".join(parts)
+        elif block.type == "tool_use":
+            tool_calls.append(
+                {
+                    "id": block.id,
+                    "type": "function",
+                    "function": {
+                        "name": block.name,
+                        "arguments": json.dumps(block.input, ensure_ascii=True),
+                    },
+                }
+            )
+    text = "".join(parts)
+    message: dict[str, Any] = {"role": "assistant", "content": text or None}
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    return text, message
 
 
 @register_provider("anthropic")
@@ -144,7 +234,7 @@ class AnthropicProvider(BaseProvider):
             messages=msgs,
             **filtered,
         )
-        text = _extract_text(resp)
+        text, message = _extract_response(resp)
         usage = None
         if resp.usage:
             usage = {
@@ -154,11 +244,11 @@ class AnthropicProvider(BaseProvider):
             }
         return ProviderResponse(
             text=text,
-            message={"role": "assistant", "content": text},
+            message=message,
             usage=usage,
         )
 
-    async def stream(self, messages: list[dict], **kwargs) -> AsyncGenerator[str, None]:
+    async def stream(self, messages: list[dict], **kwargs) -> AsyncGenerator[str | dict[str, Any], None]:
         client = self._client()
         system, msgs = _convert_messages(messages)
         filtered = _filter_kwargs(kwargs)
@@ -169,5 +259,76 @@ class AnthropicProvider(BaseProvider):
             messages=msgs,
             **filtered,
         ) as stream:
-            async for text in stream.text_stream:
-                yield text
+            prompt_tokens = 0
+            async for event in stream:
+                event_type = getattr(event, "type", "")
+                if event_type == "message_start":
+                    event_usage = getattr(getattr(event, "message", None), "usage", None)
+                    prompt_tokens = getattr(event_usage, "input_tokens", 0) or 0
+                    continue
+                if event_type == "content_block_start":
+                    block = getattr(event, "content_block", None)
+                    if getattr(block, "type", "") == "tool_use":
+                        yield {
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {
+                                        "tool_calls": [
+                                            {
+                                                "index": event.index,
+                                                "id": block.id,
+                                                "type": "function",
+                                                "function": {
+                                                    "name": block.name,
+                                                    "arguments": "",
+                                                },
+                                            }
+                                        ]
+                                    },
+                                    "finish_reason": None,
+                                }
+                            ]
+                        }
+                    continue
+                if event_type == "content_block_delta":
+                    delta = getattr(event, "delta", None)
+                    delta_type = getattr(delta, "type", "")
+                    if delta_type == "text_delta":
+                        yield delta.text
+                    elif delta_type == "input_json_delta":
+                        yield {
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {
+                                        "tool_calls": [
+                                            {
+                                                "index": event.index,
+                                                "function": {"arguments": delta.partial_json},
+                                            }
+                                        ]
+                                    },
+                                    "finish_reason": None,
+                                }
+                            ]
+                        }
+                    continue
+                if event_type == "message_delta":
+                    event_usage = getattr(event, "usage", None)
+                    output_tokens = getattr(event_usage, "output_tokens", 0) or 0
+                    stop_reason = getattr(getattr(event, "delta", None), "stop_reason", None)
+                    yield {
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": "tool_calls" if stop_reason == "tool_use" else stop_reason,
+                            }
+                        ],
+                        "usage": {
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": output_tokens,
+                            "total_tokens": prompt_tokens + output_tokens,
+                        },
+                    }

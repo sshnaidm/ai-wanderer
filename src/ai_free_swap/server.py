@@ -296,7 +296,7 @@ def create_app(config: AppConfig, *, state_file: str | None = None) -> FastAPI:
 
     @app.get("/dashboard/data")
     async def dashboard_data():
-        return router.dashboard_snapshot()
+        return await router.dashboard_snapshot()
 
     @app.api_route("/", methods=["GET", "HEAD"])
     async def root():
